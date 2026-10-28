@@ -60,6 +60,7 @@ def main():
 
     while True:
         print_board(gs.board)
+        valid_moves = gs.get_valid_moves()  # also detects checkmate and stalemate
         if gs.checkmate:
             winner = "Black" if gs.white_to_move else "White"
             print(f"Checkmate! {winner} wins!")
@@ -67,6 +68,8 @@ def main():
         if gs.stalemate:
             print("Stalemate! It's a draw.")
             break
+        if gs.in_check():
+            print("Check!")
 
         if gs.white_to_move:
             # Human player (White)
@@ -82,7 +85,6 @@ def main():
                 continue
 
             move = Move(start_sq, end_sq, gs.board)
-            valid_moves = gs.get_valid_moves()
 
             if move not in valid_moves:
                 print("Invalid move. Try again.\n")
