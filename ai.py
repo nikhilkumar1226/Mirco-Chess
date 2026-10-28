@@ -26,6 +26,37 @@ def evaluate_board(game_state):
     )
     return score
 
+def move_priority(move):
+    """How promising a move looks before searching it (higher = search it earlier)"""
+    priority = 0
+    if move.piece_captured != "--":
+        # Capture the most valuable piece, preferably with the least valuable one
+        attacker = 0 if move.piece_moved.endswith("king") else get_piece_value(move.piece_moved)
+        priority += 100 + 10 * get_piece_value(move.piece_captured) - attacker
+    if move.is_promotion:
+        priority += 50 + PIECE_VALUES[move.promotion_piece]
+    return priority
+
+def order_moves(moves):
+    """Sort moves so captures and promotions come first.
+
+    Alpha-beta pruning cuts off far more of the search when good moves are tried first.
+    """
+    return sorted(moves, key=move_priority, reverse=True)
+
+def legal_moves_in_order(game_state):
+    """Yield the legal moves, most promising first.
+
+    Each move is only checked for legality (does it leave our king in check?)
+    when the search actually reaches it, so moves skipped by pruning cost nothing.
+    """
+    for move in order_moves(game_state.get_all_possible_moves()):
+        game_state.make_move(move)
+        legal = not game_state.is_king_attacked(white=not game_state.white_to_move)
+        game_state.undo_move(move)
+        if legal:
+            yield move
+
 def minimax_alpha_beta(game_state, depth, alpha, beta, maximizing_player):
     """
     Minimax Algorithm with Alpha-Beta Pruning
@@ -48,16 +79,12 @@ def minimax_alpha_beta(game_state, depth, alpha, beta, maximizing_player):
     if depth == 0:
         return evaluate_board(game_state)
 
-    valid_moves = game_state.get_valid_moves()
-    if not valid_moves:
-        if game_state.in_check():
-            # Checkmate: the side to move has lost
-            return -9999 if game_state.white_to_move else 9999
-        return 0  # Stalemate is a draw
+    found_legal_move = False
 
     if maximizing_player:  # White's turn (maximize score)
         max_eval = float('-inf')
-        for move in valid_moves:
+        for move in legal_moves_in_order(game_state):
+            found_legal_move = True
             game_state.make_move(move)
             eval_score = minimax_alpha_beta(game_state, depth - 1, alpha, beta, False)
             game_state.undo_move(move)
@@ -68,11 +95,12 @@ def minimax_alpha_beta(game_state, depth, alpha, beta, maximizing_player):
             # Alpha-Beta Pruning: Cut off if beta <= alpha
             if beta <= alpha:
                 break
-        return max_eval
+        best = max_eval
 
     else:  # Black's turn (minimize score)
         min_eval = float('inf')
-        for move in valid_moves:
+        for move in legal_moves_in_order(game_state):
+            found_legal_move = True
             game_state.make_move(move)
             eval_score = minimax_alpha_beta(game_state, depth - 1, alpha, beta, True)
             game_state.undo_move(move)
@@ -83,7 +111,14 @@ def minimax_alpha_beta(game_state, depth, alpha, beta, maximizing_player):
             # Alpha-Beta Pruning: Cut off if beta <= alpha
             if beta <= alpha:
                 break
-        return min_eval
+        best = min_eval
+
+    if not found_legal_move:
+        if game_state.in_check():
+            # Checkmate: the side to move has lost
+            return -9999 if game_state.white_to_move else 9999
+        return 0  # Stalemate is a draw
+    return best
 
 def get_ai_move(game_state, depth=3):
     """
@@ -105,7 +140,7 @@ def get_ai_move(game_state, depth=3):
     best_score = float('inf')  # Black wants to minimize score
 
     # Evaluate each possible move
-    for move in valid_moves:
+    for move in order_moves(valid_moves):
         game_state.make_move(move)
         # Get score from White's perspective (maximizing player)
         score = minimax_alpha_beta(game_state, depth - 1, float('-inf'), float('inf'), True)
