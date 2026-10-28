@@ -24,6 +24,12 @@ class GameState:
         self.white_to_move = white_to_move
         self.white_king_location = self.find_piece("white_king")
         self.black_king_location = self.find_piece("black_king")
+        # Every position reached so far, used to spot threefold repetition
+        self.position_history = [self.position_key()]
+
+    def position_key(self):
+        """A snapshot of the position: where every piece is and whose turn it is"""
+        return tuple(tuple(row) for row in self.board), self.white_to_move
 
     def find_piece(self, piece):
         for r in range(ROWS):
@@ -49,12 +55,26 @@ class GameState:
     def get_game_result(self):
         """Return None while the game is still going, otherwise how it ended:
 
-        "checkmate" - the side to move is in check and has no legal moves (it lost)
-        "stalemate" - the side to move is not in check but has no legal moves (draw)
+        "checkmate"             - the side to move is in check and has no legal moves (it lost)
+        "stalemate"             - the side to move is not in check but has no legal moves (draw)
+        "repetition"            - the same position has appeared three times (draw)
+        "insufficient_material" - only the two kings are left (draw)
         """
-        if self.get_valid_moves():
-            return None
-        return "checkmate" if self.in_check() else "stalemate"
+        if not self.get_valid_moves():
+            return "checkmate" if self.in_check() else "stalemate"
+        if self.is_threefold_repetition():
+            return "repetition"
+        if self.is_insufficient_material():
+            return "insufficient_material"
+        return None
+
+    def is_threefold_repetition(self):
+        """True if the current position (same pieces, same player to move) has occurred 3 times"""
+        return self.position_history.count(self.position_history[-1]) >= 3
+
+    def is_insufficient_material(self):
+        """True if only the two kings are left on the board"""
+        return all(piece == EMPTY or piece.endswith("king") for row in self.board for piece in row)
 
     def get_all_possible_moves(self):
         """Moves that follow how each piece moves, without checking if the king is left in check."""
@@ -208,6 +228,7 @@ class GameState:
             self.black_king_location = (move.end_row, move.end_col)
 
         self.white_to_move = not self.white_to_move
+        self.position_history.append(self.position_key())
 
     def undo_move(self, move):
         """Undo a move - needed for minimax algorithm"""
@@ -221,6 +242,7 @@ class GameState:
             self.black_king_location = (move.start_row, move.start_col)
 
         self.white_to_move = not self.white_to_move
+        self.position_history.pop()
 
 
 class Move:
@@ -273,6 +295,10 @@ def minimax_alpha_beta(game_state, depth, alpha, beta, maximizing_player):
     Returns:
         Best evaluation score for current position
     """
+    # Draws by repetition or bare kings
+    if game_state.is_threefold_repetition() or game_state.is_insufficient_material():
+        return 0
+
     # Base case: reached max depth
     if depth == 0:
         return evaluate_board(game_state)

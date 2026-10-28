@@ -83,3 +83,39 @@ def test_undo_restores_position():
     gs.make_move(move)
     gs.undo_move(move)
     assert gs.board == before and gs.white_to_move
+
+
+def play(gs, *moves):
+    """Play moves given as "c1 a2" strings."""
+    for text in moves:
+        start, end = text.split()
+        gs.make_move(find_move(gs.get_valid_moves(), start, end)[0])
+
+
+def test_threefold_repetition_is_a_draw():
+    gs = GameState()
+    knight_dance = ["c1 a2", "b5 a3", "a2 c1", "a3 b5"]
+    play(gs, *knight_dance)
+    assert gs.get_game_result() is None        # start position seen twice
+    play(gs, *knight_dance)
+    assert gs.get_game_result() == "repetition"  # ...and now three times
+
+
+def test_undo_also_undoes_repetition_history():
+    gs = GameState()
+    play(gs, "c1 a2", "b5 a3", "a2 c1", "a3 b5", "c1 a2", "b5 a3", "a2 c1")
+    last = find_move(gs.get_valid_moves(), "a3", "b5")[0]
+    gs.make_move(last)
+    assert gs.get_game_result() == "repetition"
+    gs.undo_move(last)
+    assert gs.get_game_result() is None
+
+
+def test_only_kings_left_is_a_draw():
+    gs = position({"a5": "black_king", "d1": "white_king"})
+    assert gs.get_game_result() == "insufficient_material"
+
+
+def test_king_and_pawn_is_not_a_draw():
+    gs = position({"a5": "black_king", "d1": "white_king", "d2": "white_pawn"})
+    assert gs.get_game_result() is None

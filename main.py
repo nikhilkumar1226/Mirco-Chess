@@ -55,7 +55,11 @@ def game_over_message(gs, result):
     if result == "checkmate":
         winner = "Black" if gs.white_to_move else "White"
         return f"Checkmate! {winner} wins!"
-    return "Stalemate! It's a draw."
+    if result == "stalemate":
+        return "Stalemate! It's a draw."
+    if result == "repetition":
+        return "Draw by threefold repetition."
+    return "Draw - only the two kings are left."
 
 def main():
     gs = GameState()
