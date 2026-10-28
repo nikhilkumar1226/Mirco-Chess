@@ -1,4 +1,4 @@
-from chess_engine import get_ai_move
+from ai import get_ai_move
 from helpers import position, square, find_move
 from main import find_legal_moves
 

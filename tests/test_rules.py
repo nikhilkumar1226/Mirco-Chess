@@ -1,6 +1,7 @@
 import random
 
-from chess_engine import GameState, get_ai_move
+from chess_engine import GameState
+from ai import get_ai_move
 from helpers import position, square, find_move
 
 

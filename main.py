@@ -1,6 +1,7 @@
 # main.py - play Micro Chess in the terminal against the AI
 import sys
-from chess_engine import GameState, get_ai_move
+from chess_engine import GameState
+from ai import get_ai_move
 
 # Board settings
 ROWS, COLS = 5, 4
