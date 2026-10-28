@@ -24,19 +24,24 @@ def print_board(board):
         print(row_str)
     print("  +" + "--"*COLS + "+")
 
+FILES = "abcd"   # columns, left to right
+RANKS = "12345"  # rows, numbered from the bottom (1) to the top (5)
+
+def parse_square(text):
+    """Convert a square like 'b3' to (row, col). Returns None if it isn't on the board."""
+    if len(text) != 2 or text[0] not in FILES or text[1] not in RANKS:
+        return None
+    return ROWS - int(text[1]), FILES.index(text[0])
+
 def parse_move(move_str):
-    #Convert input like 'a2 a3' to ((row1,col1), (row2,col2))
-    try:
-        start, end = move_str.strip().lower().split()
-        cols = {'a':0, 'b':1, 'c':2, 'd':3}
-        # Rows are numbered from bottom (1) to top (5)
-        start_col = cols[start[0]]
-        start_row = ROWS - int(start[1])
-        end_col = cols[end[0]]
-        end_row = ROWS - int(end[1])
-        return (start_row, start_col), (end_row, end_col)
-    except Exception:
+    """Convert input like 'a2 a3' to ((row1, col1), (row2, col2)), or (None, None) if invalid."""
+    parts = move_str.strip().lower().split()
+    if len(parts) != 2:
         return None, None
+    start, end = parse_square(parts[0]), parse_square(parts[1])
+    if start is None or end is None:
+        return None, None
+    return start, end
 
 def move_to_notation(move):
     """Convert move object back to notation for display"""
