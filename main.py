@@ -1,6 +1,6 @@
 # main.py - play Micro Chess in the terminal against the AI
 import sys
-from chess_engine import GameState, Move, get_ai_move
+from chess_engine import GameState, get_ai_move
 
 # Board settings
 ROWS, COLS = 5, 4
@@ -50,6 +50,15 @@ def move_to_notation(move):
     end_notation = cols[move.end_col] + str(ROWS - move.end_row)
     return f"{start_notation} {end_notation}"
 
+def find_legal_moves(gs, start_sq, end_sq):
+    """The engine's own legal moves from start_sq to end_sq (empty list if that move is illegal).
+
+    We use the engine's Move objects (instead of building a new one) so details
+    like pawn promotion are kept.
+    """
+    return [m for m in gs.get_valid_moves()
+            if (m.start_row, m.start_col) == start_sq and (m.end_row, m.end_col) == end_sq]
+
 def game_over_message(gs, result):
     """Text to show when the game ends (result comes from gs.get_game_result())"""
     if result == "checkmate":
@@ -91,12 +100,12 @@ def main():
                 print("Invalid move format. Please enter moves like 'a2 a3'.\n")
                 continue
 
-            move = Move(start_sq, end_sq, gs.board)
-
-            if move not in gs.get_valid_moves():
+            legal = find_legal_moves(gs, start_sq, end_sq)
+            if not legal:
                 print("Invalid move. Try again.\n")
                 continue
 
+            move = legal[0]
             gs.make_move(move)
             print(f"White played: {move_input}\n")
         else:
