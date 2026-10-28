@@ -24,8 +24,6 @@ class GameState:
         self.white_to_move = white_to_move
         self.white_king_location = self.find_piece("white_king")
         self.black_king_location = self.find_piece("black_king")
-        self.checkmate = False
-        self.stalemate = False
 
     def find_piece(self, piece):
         for r in range(ROWS):
@@ -38,7 +36,6 @@ class GameState:
         """Return all legal moves for the side to move.
 
         A move is only legal if it doesn't leave the mover's own king in check.
-        Also sets self.checkmate / self.stalemate when there are no legal moves.
         """
         moves = []
         for move in self.get_all_possible_moves():
@@ -47,14 +44,17 @@ class GameState:
             if not self.is_king_attacked(white=not self.white_to_move):
                 moves.append(move)
             self.undo_move(move)
-
-        if len(moves) == 0:
-            if self.in_check():
-                self.checkmate = True
-            else:
-                self.stalemate = True
-
         return moves
+
+    def get_game_result(self):
+        """Return None while the game is still going, otherwise how it ended:
+
+        "checkmate" - the side to move is in check and has no legal moves (it lost)
+        "stalemate" - the side to move is not in check but has no legal moves (draw)
+        """
+        if self.get_valid_moves():
+            return None
+        return "checkmate" if self.in_check() else "stalemate"
 
     def get_all_possible_moves(self):
         """Moves that follow how each piece moves, without checking if the king is left in check."""
@@ -221,8 +221,6 @@ class GameState:
             self.black_king_location = (move.start_row, move.start_col)
 
         self.white_to_move = not self.white_to_move
-        self.checkmate = False
-        self.stalemate = False
 
 
 class Move:
@@ -254,11 +252,6 @@ def get_piece_value(piece):
 
 def evaluate_board(game_state):
     """Evaluate board position: Positive = good for White, Negative = good for Black"""
-    if game_state.checkmate:
-        return -9999 if game_state.white_to_move else 9999
-    if game_state.stalemate:
-        return 0
-
     # Material evaluation
     score = sum(
         get_piece_value(piece) if piece.startswith("white") else -get_piece_value(piece)
@@ -280,14 +273,16 @@ def minimax_alpha_beta(game_state, depth, alpha, beta, maximizing_player):
     Returns:
         Best evaluation score for current position
     """
-    # Base case: reached max depth or game over
-    if depth == 0 or game_state.checkmate or game_state.stalemate:
+    # Base case: reached max depth
+    if depth == 0:
         return evaluate_board(game_state)
 
     valid_moves = game_state.get_valid_moves()
     if not valid_moves:
-        # Checkmate or stalemate: get_valid_moves() just set the flag
-        return evaluate_board(game_state)
+        if game_state.in_check():
+            # Checkmate: the side to move has lost
+            return -9999 if game_state.white_to_move else 9999
+        return 0  # Stalemate is a draw
 
     if maximizing_player:  # White's turn (maximize score)
         max_eval = float('-inf')

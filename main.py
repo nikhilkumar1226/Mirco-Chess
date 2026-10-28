@@ -50,6 +50,13 @@ def move_to_notation(move):
     end_notation = cols[move.end_col] + str(ROWS - move.end_row)
     return f"{start_notation} {end_notation}"
 
+def game_over_message(gs, result):
+    """Text to show when the game ends (result comes from gs.get_game_result())"""
+    if result == "checkmate":
+        winner = "Black" if gs.white_to_move else "White"
+        return f"Checkmate! {winner} wins!"
+    return "Stalemate! It's a draw."
+
 def main():
     gs = GameState()
 
@@ -60,13 +67,9 @@ def main():
 
     while True:
         print_board(gs.board)
-        valid_moves = gs.get_valid_moves()  # also detects checkmate and stalemate
-        if gs.checkmate:
-            winner = "Black" if gs.white_to_move else "White"
-            print(f"Checkmate! {winner} wins!")
-            break
-        if gs.stalemate:
-            print("Stalemate! It's a draw.")
+        result = gs.get_game_result()
+        if result is not None:
+            print(game_over_message(gs, result))
             break
         if gs.in_check():
             print("Check!")
@@ -86,7 +89,7 @@ def main():
 
             move = Move(start_sq, end_sq, gs.board)
 
-            if move not in valid_moves:
+            if move not in gs.get_valid_moves():
                 print("Invalid move. Try again.\n")
                 continue
 

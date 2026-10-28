@@ -37,11 +37,15 @@ def test_must_get_out_of_check():
         gs.undo_move(move)
 
 
+def test_game_is_not_over_at_the_start():
+    assert GameState().get_game_result() is None
+
+
 def test_checkmate_is_detected():
     # Rook d5 checks along rank 5, the white king on b3 covers a4 and b4
     gs = position({"a5": "black_king", "d5": "white_rook", "b3": "white_king"}, white_to_move=False)
     assert gs.get_valid_moves() == []
-    assert gs.checkmate and not gs.stalemate
+    assert gs.get_game_result() == "checkmate"
 
 
 def test_stalemate_is_detected():
@@ -49,13 +53,13 @@ def test_stalemate_is_detected():
     gs = position({"a5": "black_king", "b3": "white_king", "d3": "white_bishop"}, white_to_move=False)
     assert not gs.in_check()
     assert gs.get_valid_moves() == []
-    assert gs.stalemate and not gs.checkmate
+    assert gs.get_game_result() == "stalemate"
 
 
 def test_ai_does_not_walk_into_check_when_stalemated():
     gs = position({"a5": "black_king", "b3": "white_king", "d3": "white_bishop"}, white_to_move=False)
     assert get_ai_move(gs) is None
-    assert gs.stalemate
+    assert gs.get_game_result() == "stalemate"
 
 
 def test_random_games_never_leave_a_king_in_check():
