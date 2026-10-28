@@ -2,6 +2,7 @@ from functools import lru_cache
 
 ROWS, COLS = 5, 4
 EMPTY = "--"
+PROMOTION_PIECES = ("rook", "bishop", "knight")  # what a pawn can become
 
 KNIGHT_OFFSETS = [(2, 1), (2, -1), (-2, 1), (-2, -1), (1, 2), (1, -2), (-1, 2), (-1, -2)]
 KING_OFFSETS = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
@@ -102,13 +103,11 @@ class GameState:
         direction = -1 if self.white_to_move else 1
         promotion_row = 0 if self.white_to_move else 4
 
+        targets = []
+
         # Forward move
         if 0 <= r + direction < 5 and self.board[r + direction][c] == "--":
-            if r + direction == promotion_row:
-                # Promotion - just promote to queen for simplicity
-                moves.append(Move((r, c), (r + direction, c), self.board, is_promotion=True))
-            else:
-                moves.append(Move((r, c), (r + direction, c), self.board))
+            targets.append((r + direction, c))
 
         # Capture moves
         for dc in [-1, 1]:
@@ -116,10 +115,16 @@ class GameState:
             if 0 <= nr < 5 and 0 <= nc < 4:
                 target = self.board[nr][nc]
                 if target != "--" and target.startswith("white" if not self.white_to_move else "black"):
-                    if nr == promotion_row:
-                        moves.append(Move((r, c), (nr, nc), self.board, is_promotion=True))
-                    else:
-                        moves.append(Move((r, c), (nr, nc), self.board))
+                    targets.append((nr, nc))
+
+        for nr, nc in targets:
+            if nr == promotion_row:
+                # Promotion: there's no queen in Micro Chess, so the pawn can
+                # become a rook, bishop or knight (one move for each choice)
+                for piece in PROMOTION_PIECES:
+                    moves.append(Move((r, c), (nr, nc), self.board, promotion_piece=piece))
+            else:
+                moves.append(Move((r, c), (nr, nc), self.board))
 
     def get_knight_moves(self, r, c, moves):
         ally = "white" if self.white_to_move else "black"
@@ -215,9 +220,9 @@ class GameState:
         self.board[move.start_row][move.start_col] = "--"
 
         # Handle pawn promotion
-        if move.is_promotion and move.piece_moved.endswith("pawn"):
+        if move.is_promotion:
             color = "white" if move.piece_moved.startswith("white") else "black"
-            self.board[move.end_row][move.end_col] = f"{color}_knight"  # Promote to knight
+            self.board[move.end_row][move.end_col] = f"{color}_{move.promotion_piece}"
         else:
             self.board[move.end_row][move.end_col] = move.piece_moved
 
@@ -246,16 +251,17 @@ class GameState:
 
 
 class Move:
-    def __init__(self, start_sq, end_sq, board, is_promotion=False):
+    def __init__(self, start_sq, end_sq, board, promotion_piece=None):
         self.start_row, self.start_col = start_sq
         self.end_row, self.end_col = end_sq
         self.piece_moved = board[self.start_row][self.start_col]
         self.piece_captured = board[self.end_row][self.end_col]
-        self.is_promotion = is_promotion
+        self.promotion_piece = promotion_piece  # "rook", "bishop", "knight" or None
+        self.is_promotion = promotion_piece is not None
 
     def __eq__(self, other):
-        return (self.start_row, self.start_col, self.end_row, self.end_col) == \
-               (other.start_row, other.start_col, other.end_row, other.end_col)
+        return (self.start_row, self.start_col, self.end_row, self.end_col, self.promotion_piece) == \
+               (other.start_row, other.start_col, other.end_row, other.end_col, other.promotion_piece)
 
 
 # ============================================================================

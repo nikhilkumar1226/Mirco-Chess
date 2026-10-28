@@ -48,7 +48,19 @@ def move_to_notation(move):
     cols = ['a', 'b', 'c', 'd']
     start_notation = cols[move.start_col] + str(ROWS - move.start_row)
     end_notation = cols[move.end_col] + str(ROWS - move.end_row)
+    if move.is_promotion:
+        return f"{start_notation} {end_notation} (promotes to {move.promotion_piece})"
     return f"{start_notation} {end_notation}"
+
+PROMOTION_CHOICES = {"r": "rook", "b": "bishop", "n": "knight"}
+
+def ask_promotion_piece():
+    """Ask the human which piece their pawn should become"""
+    while True:
+        answer = input("Promote to (r)ook, (b)ishop or k(n)ight? ").strip().lower()
+        if answer in PROMOTION_CHOICES:
+            return PROMOTION_CHOICES[answer]
+        print("Please type r, b or n.")
 
 def find_legal_moves(gs, start_sq, end_sq):
     """The engine's own legal moves from start_sq to end_sq (empty list if that move is illegal).
@@ -106,8 +118,11 @@ def main():
                 continue
 
             move = legal[0]
+            if move.is_promotion:
+                piece = ask_promotion_piece()
+                move = next(m for m in legal if m.promotion_piece == piece)
             gs.make_move(move)
-            print(f"White played: {move_input}\n")
+            print(f"White played: {move_to_notation(move)}\n")
         else:
             # AI player (Black)
             print(" .....thinking....")
