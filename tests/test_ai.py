@@ -1,3 +1,4 @@
+import random
 import time
 
 import pytest
@@ -47,3 +48,28 @@ def test_hard_is_quick_enough():
     start = time.perf_counter()
     get_ai_move(gs, "hard")
     assert time.perf_counter() - start < 2.0
+
+
+def test_ai_prefers_the_fastest_mate():
+    # Ra4-a1 mates at once. A waiting move like Ra4-a2 also forces mate one move
+    # later, so if every mate scored the same the AI would sometimes dawdle.
+    gs = position({"c3": "black_king", "a4": "black_rook", "d1": "white_king"}, white_to_move=False)
+    for seed in range(20):
+        move = get_ai_move(gs, depth=4, rng=random.Random(seed))
+        assert is_move(move, "a4", "a1")
+
+
+def test_ai_varies_between_equally_good_moves():
+    # Nothing can be captured here, so all of White's moves score the same
+    gs = position({"a5": "black_king", "d1": "white_king", "a2": "white_pawn"})
+    chosen = set()
+    for seed in range(30):
+        move = get_ai_move(gs, depth=2, rng=random.Random(seed))
+        chosen.add((move.start_row, move.start_col, move.end_row, move.end_col))
+    assert len(chosen) > 1
+
+
+def test_same_seed_gives_same_move():
+    a = get_ai_move(GameState(), "medium", rng=random.Random(7))
+    b = get_ai_move(GameState(), "medium", rng=random.Random(7))
+    assert a == b
