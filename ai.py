@@ -7,6 +7,9 @@ from functools import lru_cache
 # AI IMPLEMENTATION USING MINIMAX + ALPHA-BETA PRUNING
 # ============================================================================
 
+# How many moves (plies) ahead the AI looks at each difficulty level
+DIFFICULTY_DEPTHS = {"easy": 2, "medium": 4, "hard": 6}
+
 # Piece values for evaluation
 PIECE_VALUES = {'pawn': 1, 'knight': 3, 'bishop': 3, 'rook': 5, 'king': 1000}
 
@@ -120,34 +123,41 @@ def minimax_alpha_beta(game_state, depth, alpha, beta, maximizing_player):
         return 0  # Stalemate is a draw
     return best
 
-def get_ai_move(game_state, depth=3):
+def get_ai_move(game_state, difficulty="medium", depth=None):
     """
     Main AI function - Get the best move using Minimax + Alpha-Beta Pruning
-    Can be called from anywhere in the code when AI move is needed
+    Works for whichever side is to move, so the AI can play White or Black.
 
     Args:
         game_state: Current game state
-        depth: Search depth (default 3)
+        difficulty: "easy", "medium" or "hard" (sets how deep the AI searches)
+        depth: Optional exact search depth, overrides difficulty
 
     Returns:
         Best move for current player, or None if no moves available
     """
+    if depth is None:
+        if difficulty not in DIFFICULTY_DEPTHS:
+            raise ValueError(f"difficulty must be one of {list(DIFFICULTY_DEPTHS)}, not {difficulty!r}")
+        depth = DIFFICULTY_DEPTHS[difficulty]
+
     valid_moves = game_state.get_valid_moves()
     if not valid_moves:
         return None
 
+    # White wants the highest score, Black the lowest
+    ai_is_white = game_state.white_to_move
     best_move = None
-    best_score = float('inf')  # Black wants to minimize score
+    best_score = float('-inf') if ai_is_white else float('inf')
 
     # Evaluate each possible move
     for move in order_moves(valid_moves):
         game_state.make_move(move)
-        # Get score from White's perspective (maximizing player)
-        score = minimax_alpha_beta(game_state, depth - 1, float('-inf'), float('inf'), True)
+        # After our move it's the opponent's turn: they maximize if they are White
+        score = minimax_alpha_beta(game_state, depth - 1, float('-inf'), float('inf'), not ai_is_white)
         game_state.undo_move(move)
 
-        # Black chooses move with lowest score
-        if score < best_score:
+        if (ai_is_white and score > best_score) or (not ai_is_white and score < best_score):
             best_score = score
             best_move = move
 

@@ -1,7 +1,7 @@
 # main.py - play Micro Chess in the terminal against the AI
 import sys
 from chess_engine import GameState
-from ai import get_ai_move
+from ai import get_ai_move, DIFFICULTY_DEPTHS
 
 # Board settings
 ROWS, COLS = 5, 4
@@ -83,13 +83,29 @@ def game_over_message(gs, result):
         return "Draw by threefold repetition."
     return "Draw - only the two kings are left."
 
+def ask_choice(question, choices, default):
+    """Ask until the answer is one of the choices' first letters (Enter picks the default)"""
+    options = "/".join(choices)
+    while True:
+        answer = input(f"{question} ({options}) [{default}]: ").strip().lower()
+        if answer == "":
+            return default
+        for choice in choices:
+            if answer in (choice, choice[0]):
+                return choice
+        print(f"Please type one of: {options}")
+
 def main():
     gs = GameState()
 
     print("Welcome to Terminal Micro Chess!")
-    print("You play as White, AI plays as Black")
     print("Moves format: 'a2 a3' (from-square to-square). Files: a-d, Ranks: 1-5")
     print("Enter 'quit' to exit.\n")
+
+    human_color = ask_choice("Play as", ["white", "black"], "white")
+    difficulty = ask_choice("Difficulty", list(DIFFICULTY_DEPTHS), "medium")
+    human_is_white = human_color == "white"
+    print(f"\nYou play {human_color.title()}, the AI plays {'Black' if human_is_white else 'White'} ({difficulty}).\n")
 
     while True:
         print_board(gs.board)
@@ -100,9 +116,10 @@ def main():
         if gs.in_check():
             print("Check!")
 
-        if gs.white_to_move:
-            # Human player (White)
-            print("White's move:")
+        side = "White" if gs.white_to_move else "Black"
+        if gs.white_to_move == human_is_white:
+            # Human player
+            print(f"{side}'s move:")
             move_input = input("Enter your move: ").strip()
             if move_input.lower() == "quit":
                 print("Thanks for playing!")
@@ -123,19 +140,14 @@ def main():
                 piece = ask_promotion_piece()
                 move = next(m for m in legal if m.promotion_piece == piece)
             gs.make_move(move)
-            print(f"White played: {move_to_notation(move)}\n")
+            print(f"{side} played: {move_to_notation(move)}\n")
         else:
-            # AI player (Black)
+            # AI player
             print(" .....thinking....")
-            
-            best_move = get_ai_move(gs, depth=3)  # Simply call the AI function
-            if best_move:
-                gs.make_move(best_move)
-                move_notation = move_to_notation(best_move)
-                print(f"Black played: {move_notation}\n")
-            else:
-                print("AI has no valid moves!\n")
-                break
+
+            best_move = get_ai_move(gs, difficulty)
+            gs.make_move(best_move)  # never None here: the game would already be over
+            print(f"{side} played: {move_to_notation(best_move)}\n")
 
 if __name__ == "__main__":
     main()
