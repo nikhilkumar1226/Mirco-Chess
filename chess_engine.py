@@ -1,4 +1,3 @@
-import copy
 from functools import lru_cache
 
 class GameState:

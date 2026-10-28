@@ -1,4 +1,4 @@
-# main_terminal.py
+# main.py - play Micro Chess in the terminal against the AI
 import sys
 from chess_engine import GameState, Move, get_ai_move
 
