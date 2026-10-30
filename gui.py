@@ -12,6 +12,7 @@ import pygame
 
 from ai import get_ai_move
 from chess_engine import GameState, ROWS, COLS, EMPTY, CASTLING_SQUARES
+from sounds import Sounds
 
 # Layout, in pixels
 SQUARE_SIZE = 80
@@ -139,6 +140,7 @@ class ChessGUI:
         self.clock = pygame.time.Clock()
         self.images = load_piece_images(PIECE_SIZE)
         self.small_images = load_piece_images(CAPTURED_SIZE)
+        self.sounds = Sounds()
         self.font = pygame.font.Font(None, 28)
         self.small_font = pygame.font.Font(None, 22)
         self.big_font = pygame.font.Font(None, 44)
@@ -197,6 +199,7 @@ class ChessGUI:
     def play(self, move):
         self.gs.make_move(move)
         self.animation = (move, pygame.time.get_ticks())
+        self.sounds.play("capture" if move.piece_captured != EMPTY else "move")
         self.move_log.append(move)
         self.selected = None
         self.promotion_choices = None
@@ -309,6 +312,8 @@ class ChessGUI:
         elif event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
                 self.running = False
+            elif event.key == pygame.K_m:
+                self.sounds.toggle_mute()
             elif self.in_menu:
                 if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
                     self.start_game()
@@ -584,7 +589,8 @@ class ChessGUI:
         label = self.font.render(text, True, color)
         self.screen.blit(label, label.get_rect(midleft=(16, bar.centery)))
 
-        keys = self.small_font.render("R restart  U undo  N menu", True, MUTED_TEXT)
+        sound = "unmute" if self.sounds.muted else "mute"
+        keys = self.small_font.render(f"R restart  U undo  N menu  M {sound}", True, MUTED_TEXT)
         if label.get_width() + keys.get_width() + 48 <= WIDTH:
             self.screen.blit(keys, keys.get_rect(midright=(WIDTH - 16, bar.centery)))
 

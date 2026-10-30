@@ -314,3 +314,11 @@ def test_undo_stops_the_animation(app, monkeypatch):
     click(app, "a4")
     press(app, pygame.K_u)
     assert app.animation is None and app.sliding_pieces() == ([], 1)
+
+
+def test_m_toggles_sound(app):
+    press(app, pygame.K_m)
+    assert app.sounds.muted
+    app.draw()
+    press(app, pygame.K_m)
+    assert not app.sounds.muted
