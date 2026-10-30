@@ -12,15 +12,30 @@ from helpers import position, square  # noqa: E402
 
 
 @pytest.fixture
-def app():
-    app = gui.ChessGUI(difficulty="easy")
+def menu():
+    app = gui.ChessGUI()
     yield app
     pygame.quit()
 
 
+@pytest.fixture
+def app(menu):
+    """A game against the AI on Easy, playing White"""
+    menu.difficulty = "easy"
+    menu.start_game()
+    return menu
+
+
+def click_at(app, pos):
+    app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=pos))
+
+
 def click(app, name):
-    r, c = square(name)
-    app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=app.square_rect(r, c).center))
+    click_at(app, app.square_rect(*square(name)).center)
+
+
+def click_menu(app, label):
+    click_at(app, next(rect for rect, _, _, text in app.menu_buttons() if text == label).center)
 
 
 def press(app, key):
@@ -104,8 +119,7 @@ def test_promotion_picker(app):
     click(app, "c5")
     assert [m.promotion_piece for m in app.promotion_choices] == ["rook", "bishop", "knight"]
     app.draw()
-    rect, _ = app.promotion_options()[2]
-    app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=rect.center))
+    click_at(app, app.promotion_options()[2][0].center)
     assert app.gs.board[0][2] == "white_knight"
 
 
@@ -114,12 +128,18 @@ def test_game_over_and_play_again(app):
     load(app, position({"a5": "black_king", "b3": "white_king", "c4": "white_pawn"}))
     click(app, "c4")
     click(app, "c5")
-    rect, _ = app.promotion_options()[0]
-    app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=rect.center))
+    click_at(app, app.promotion_options()[0][0].center)
     assert app.result == "checkmate"
     app.draw()
-    app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=app.play_again_rect().center))
-    assert app.result is None and app.move_log == []
+    click_at(app, app.play_again_rect().center)
+    assert app.result is None and app.move_log == [] and not app.in_menu
+
+
+def test_game_over_back_to_menu(app):
+    load(app, position({"a5": "black_king", "d5": "white_rook", "b3": "white_king"}, white_to_move=False))
+    assert app.result == "checkmate"
+    click_at(app, app.menu_button_rect().center)
+    assert app.in_menu
 
 
 def test_restart_and_quit_keys(app):
@@ -129,3 +149,43 @@ def test_restart_and_quit_keys(app):
     assert app.move_log == [] and not app.ai_thinking
     press(app, pygame.K_ESCAPE)
     assert not app.running
+
+
+def test_starts_on_the_menu(menu):
+    menu.draw()
+    menu.update()
+    assert menu.in_menu and not menu.ai_thinking
+
+
+def test_menu_play_black_on_hard(menu):
+    click_menu(menu, "Black")
+    click_menu(menu, "Hard")
+    click_at(menu, menu.start_button_rect().center)
+    assert not menu.in_menu
+    assert (menu.human_is_white, menu.difficulty, menu.two_players) == (False, "hard", False)
+    menu.update()
+    assert menu.ai_thinking  # the AI plays White, so it moves first
+    wait_for_ai(menu)
+    assert len(menu.move_log) == 1 and menu.is_human_turn()
+
+
+def test_two_player_mode_has_no_ai(menu):
+    click_menu(menu, "2 Players")
+    click_menu(menu, "Hard")  # disabled in a 2-player game
+    assert menu.difficulty == "medium"
+    press(menu, pygame.K_RETURN)
+    click(menu, "d2")
+    click(menu, "d3")
+    menu.update()
+    assert not menu.ai_thinking
+    click(menu, "b5")  # now Black moves
+    click(menu, "c3")
+    assert len(menu.move_log) == 2
+    press(menu, pygame.K_u)  # takes back just one move
+    assert len(menu.move_log) == 1 and not menu.gs.white_to_move
+
+
+def test_n_goes_back_to_the_menu(app):
+    press(app, pygame.K_n)
+    assert app.in_menu
+    app.draw()

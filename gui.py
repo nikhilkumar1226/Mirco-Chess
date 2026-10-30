@@ -35,6 +35,9 @@ MUTED_TEXT = pygame.Color("#97a394")
 CHECK_TEXT = pygame.Color("#ff7b6e")
 BUTTON = pygame.Color("#5b8a51")
 BUTTON_HOVER = pygame.Color("#6b9e60")
+CHOICE = pygame.Color("#343c32")
+CHOICE_HOVER = pygame.Color("#3f493d")
+DISABLED_TEXT = pygame.Color("#5d665b")
 LAST_MOVE = (246, 226, 90, 105)        # highlights are drawn see-through (the 4th number is alpha)
 SELECTED = (246, 226, 90, 170)
 MOVE_HINT = (25, 50, 25, 80)
@@ -45,6 +48,14 @@ FILES = "abcd"
 IMAGE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "images")
 PIECE_NAMES = [f"{color}_{kind}" for color in ("white", "black")
                for kind in ("king", "rook", "bishop", "knight", "pawn")]
+
+# Start menu: (heading, the setting it changes, [(button label, value), ...])
+MENU_CHOICES = [
+    ("Opponent", "two_players", [("Computer", False), ("2 Players", True)]),
+    ("Play as", "human_is_white", [("White", True), ("Black", False)]),
+    ("Difficulty", "difficulty", [("Easy", "easy"), ("Medium", "medium"), ("Hard", "hard")]),
+]
+MENU_WIDTH = 312
 
 DRAW_TEXT = {
     "stalemate": ("Stalemate", "It's a draw"),
@@ -95,7 +106,7 @@ def result_line(result, white_to_move):
 
 
 class ChessGUI:
-    def __init__(self, human_is_white=True, difficulty="medium"):
+    def __init__(self):
         pygame.init()
         pygame.display.set_caption("Micro Chess")
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
@@ -104,6 +115,7 @@ class ChessGUI:
         self.font = pygame.font.Font(None, 28)
         self.small_font = pygame.font.Font(None, 22)
         self.big_font = pygame.font.Font(None, 44)
+        self.title_font = pygame.font.Font(None, 64)
 
         self.last_move_overlay = translucent_square(LAST_MOVE)
         self.selected_overlay = translucent_square(SELECTED)
@@ -114,14 +126,27 @@ class ChessGUI:
         pygame.draw.circle(self.capture_ring, MOVE_HINT, (SQUARE_SIZE // 2, SQUARE_SIZE // 2),
                            SQUARE_SIZE // 2 - 2, 7)
 
-        self.human_is_white = human_is_white
-        self.difficulty = difficulty
+        # Settings chosen on the start menu
+        self.two_players = False
+        self.human_is_white = True
+        self.difficulty = "medium"
+
         self.ai_results = queue.Queue()  # (search id, move) pairs from the AI thread
         self.search_id = 0
         self.running = True
+        self.in_menu = True
         self.new_game()
 
     # ---- game state -------------------------------------------------------
+
+    def start_game(self):
+        """Leave the start menu and play with the chosen settings"""
+        self.in_menu = False
+        self.new_game()
+
+    def open_menu(self):
+        self.in_menu = True
+        self.cancel_ai()
 
     def new_game(self):
         self.gs = GameState()
@@ -146,9 +171,9 @@ class ChessGUI:
         self.refresh()
 
     def undo(self):
-        """Take back your last move and the AI's reply to it"""
+        """Take back your last move and the AI's reply to it (one move in a 2-player game)"""
         # While the AI is thinking (or after you ended the game) only your move needs taking back
-        count = 2 if self.is_human_turn() else 1
+        count = 2 if self.is_human_turn() and not self.two_players else 1
         if len(self.move_log) < count:
             return
         for _ in range(count):
@@ -159,7 +184,7 @@ class ChessGUI:
         self.refresh()
 
     def is_human_turn(self):
-        return self.gs.white_to_move == self.human_is_white
+        return self.two_players or self.gs.white_to_move == self.human_is_white
 
     def moves_from(self, square):
         return [m for m in self.valid_moves if (m.start_row, m.start_col) == square]
@@ -194,7 +219,7 @@ class ChessGUI:
                 self.ai_thinking = False
                 # The AI searched a copy of the game: play the same move on the real one
                 self.play(next(m for m in self.valid_moves if m == ai_move))
-        if self.result is None and not self.is_human_turn() and not self.ai_thinking:
+        if not self.in_menu and self.result is None and not self.is_human_turn() and not self.ai_thinking:
             self.start_ai()
 
     # ---- input ------------------------------------------------------------
@@ -205,17 +230,34 @@ class ChessGUI:
         elif event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
                 self.running = False
+            elif self.in_menu:
+                if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
+                    self.start_game()
             elif event.key == pygame.K_r:
                 self.new_game()
             elif event.key == pygame.K_u:
                 self.undo()
+            elif event.key == pygame.K_n:
+                self.open_menu()
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            self.handle_click(event.pos)
+            if self.in_menu:
+                self.handle_menu_click(event.pos)
+            else:
+                self.handle_click(event.pos)
+
+    def handle_menu_click(self, pos):
+        for rect, setting, value, _ in self.menu_buttons():
+            if rect.collidepoint(pos) and self.menu_setting_enabled(setting):
+                setattr(self, setting, value)
+        if self.start_button_rect().collidepoint(pos):
+            self.start_game()
 
     def handle_click(self, pos):
         if self.result is not None:
             if self.play_again_rect().collidepoint(pos):
                 self.new_game()
+            elif self.menu_button_rect().collidepoint(pos):
+                self.open_menu()
             return
 
         if self.promotion_choices:
@@ -276,14 +318,50 @@ class ChessGUI:
                 for i, move in enumerate(self.promotion_choices)]
 
     def play_again_rect(self):
-        rect = pygame.Rect(0, 0, 160, 44)
-        rect.center = (self.board_rect().centerx, self.board_rect().centery + 40)
+        rect = pygame.Rect(0, 0, 124, 44)
+        rect.midright = (self.board_rect().centerx - 6, self.board_rect().centery + 40)
+        return rect
+
+    def menu_button_rect(self):
+        rect = pygame.Rect(0, 0, 124, 44)
+        rect.midleft = (self.board_rect().centerx + 6, self.board_rect().centery + 40)
+        return rect
+
+    # ---- start menu geometry ----------------------------------------------
+
+    def menu_headings(self):
+        """(heading, setting, position) for each group of choices on the start menu"""
+        left = (WIDTH - MENU_WIDTH) // 2
+        return [(heading, setting, (left, 150 + i * 92))
+                for i, (heading, setting, _) in enumerate(MENU_CHOICES)]
+
+    def menu_buttons(self):
+        """(rect, setting, value, label) for every choice button on the start menu"""
+        buttons = []
+        for (_, setting, (left, top)), (_, _, choices) in zip(self.menu_headings(), MENU_CHOICES):
+            gap = 10
+            width = (MENU_WIDTH - gap * (len(choices) - 1)) // len(choices)
+            for i, (label, value) in enumerate(choices):
+                rect = pygame.Rect(left + i * (width + gap), top + 24, width, 44)
+                buttons.append((rect, setting, value, label))
+        return buttons
+
+    def menu_setting_enabled(self, setting):
+        # Side and difficulty only matter against the computer
+        return setting == "two_players" or not self.two_players
+
+    def start_button_rect(self):
+        rect = pygame.Rect(0, 0, 200, 52)
+        rect.center = (WIDTH // 2, 452)
         return rect
 
     # ---- drawing ----------------------------------------------------------
 
     def draw(self):
         self.screen.fill(BACKGROUND)
+        if self.in_menu:
+            self.draw_menu()
+            return
         self.draw_board()
         self.draw_coordinates()
         self.draw_status()
@@ -291,6 +369,38 @@ class ChessGUI:
             self.draw_promotion_picker()
         if self.result is not None:
             self.draw_game_over()
+
+    def draw_menu(self):
+        title = self.title_font.render("Micro Chess", True, TEXT)
+        title_rect = title.get_rect(center=(WIDTH // 2, 70))
+        self.screen.blit(title, title_rect)
+        subtitle = self.small_font.render("Chess on a 4x5 board", True, MUTED_TEXT)
+        self.screen.blit(subtitle, subtitle.get_rect(center=(WIDTH // 2, title_rect.bottom + 14)))
+
+        for heading, setting, position in self.menu_headings():
+            color = MUTED_TEXT if self.menu_setting_enabled(setting) else DISABLED_TEXT
+            self.screen.blit(self.small_font.render(heading.upper(), True, color), position)
+
+        mouse = pygame.mouse.get_pos()
+        for rect, setting, value, label in self.menu_buttons():
+            enabled = self.menu_setting_enabled(setting)
+            chosen = getattr(self, setting) == value
+            hover = enabled and rect.collidepoint(mouse)
+            if chosen and enabled:
+                fill = BUTTON_HOVER if hover else BUTTON
+            else:
+                fill = CHOICE_HOVER if hover else CHOICE
+            pygame.draw.rect(self.screen, fill, rect, border_radius=10)
+            if chosen and not enabled:
+                pygame.draw.rect(self.screen, DISABLED_TEXT, rect, 2, border_radius=10)
+            text = self.font.render(label, True, TEXT if enabled else DISABLED_TEXT)
+            self.screen.blit(text, text.get_rect(center=rect.center))
+
+        button = self.start_button_rect()
+        hover = button.collidepoint(mouse)
+        pygame.draw.rect(self.screen, BUTTON_HOVER if hover else BUTTON, button, border_radius=12)
+        label = self.font.render("Start game", True, TEXT)
+        self.screen.blit(label, label.get_rect(center=button.center))
 
     def draw_board(self):
         for r in range(ROWS):
@@ -347,7 +457,7 @@ class ChessGUI:
         label = self.font.render(text, True, color)
         self.screen.blit(label, label.get_rect(midleft=(16, bar.centery)))
 
-        keys = self.small_font.render("R new  U undo  Esc quit", True, MUTED_TEXT)
+        keys = self.small_font.render("R restart  U undo  N menu", True, MUTED_TEXT)
         if label.get_width() + keys.get_width() + 48 <= WIDTH:
             self.screen.blit(keys, keys.get_rect(midright=(WIDTH - 16, bar.centery)))
 
@@ -391,11 +501,12 @@ class ChessGUI:
         detail_label = self.font.render(detail, True, DARK_TEXT)
         self.screen.blit(detail_label, detail_label.get_rect(center=(area.centerx, area.top + 72)))
 
-        button = self.play_again_rect()
-        hover = button.collidepoint(pygame.mouse.get_pos())
-        pygame.draw.rect(self.screen, BUTTON_HOVER if hover else BUTTON, button, border_radius=10)
-        label = self.font.render("Play again", True, TEXT)
-        self.screen.blit(label, label.get_rect(center=button.center))
+        mouse = pygame.mouse.get_pos()
+        for button, text in ((self.play_again_rect(), "Play again"), (self.menu_button_rect(), "Menu")):
+            hover = button.collidepoint(mouse)
+            pygame.draw.rect(self.screen, BUTTON_HOVER if hover else BUTTON, button, border_radius=10)
+            label = self.font.render(text, True, TEXT)
+            self.screen.blit(label, label.get_rect(center=button.center))
 
     # ---- main loop --------------------------------------------------------
 
