@@ -3,6 +3,8 @@
 import random
 from functools import lru_cache
 
+from chess_engine import ROWS, COLS, KNIGHT_OFFSETS, ROOK_DIRECTIONS, BISHOP_DIRECTIONS
+
 
 # ============================================================================
 # AI IMPLEMENTATION USING MINIMAX + ALPHA-BETA PRUNING
@@ -11,11 +13,120 @@ from functools import lru_cache
 # How many moves (plies) ahead the AI looks at each difficulty level
 DIFFICULTY_DEPTHS = {"easy": 2, "medium": 4, "hard": 6}
 
-# Score for checkmate. A mate found sooner scores higher, so the AI goes for the fastest win
-MATE_SCORE = 10000
+# Score for checkmate, far above any normal evaluation (which stays within a few thousand).
+# A mate found sooner scores higher, so the AI goes for the fastest win
+MATE_SCORE = 100000
 
-# Piece values for evaluation
-PIECE_VALUES = {'pawn': 1, 'knight': 3, 'bishop': 3, 'rook': 5, 'king': 1000}
+# Piece values in centipawns (a pawn is 100). Kings are never captured, so they count 0.
+PIECE_VALUES = {'pawn': 100, 'knight': 300, 'bishop': 300, 'rook': 500, 'king': 0}
+
+# Piece-square tables: a bonus (or penalty) for each piece depending on where it stands.
+# Written from White's side with rank 5 at the top, like the board is printed. Black's
+# pieces use the table turned around (a5 for Black is d1 for White), because the
+# starting position looks the same from both sides that way.
+# Every step is 5 or 10 points, so slightly different moves can still score exactly the same.
+PAWN_TABLE = [
+    [0, 0, 0, 0],          # rank 5: pawns promote as soon as they get here
+    [30, 30, 30, 30],      # rank 4: one step from promoting
+    [10, 10, 10, 10],      # rank 3
+    [0, 0, 0, 0],          # rank 2: White's pawn starts here
+    [0, 0, 0, 0],
+]
+KNIGHT_TABLE = [            # knights want the center, where they reach the most squares
+    [-20, -10, -10, -20],
+    [-10, 10, 10, -10],
+    [-10, 15, 15, -10],
+    [-10, 10, 10, -10],
+    [-20, -10, -10, -20],
+]
+BISHOP_TABLE = [
+    [-10, -5, -5, -10],
+    [-5, 5, 5, -5],
+    [-5, 10, 10, -5],
+    [-5, 5, 5, -5],
+    [-10, -5, -5, -10],
+]
+ROOK_TABLE = [
+    [0, 0, 0, 0],
+    [10, 10, 10, 10],      # rank 4: Black's pawn rank, the rook's favourite
+    [0, 0, 0, 0],
+    [0, 0, 0, 0],
+    [0, 5, 5, 0],
+]
+# The king hides in its corner while there are pieces around to attack it
+# (b1 is where it lands after castling), and heads for the center in the endgame
+KING_MIDDLEGAME_TABLE = [
+    [-30, -30, -30, -30],
+    [-20, -20, -20, -20],
+    [-10, -10, -10, -10],
+    [0, 0, 0, 0],
+    [10, 20, 10, 0],
+]
+KING_ENDGAME_TABLE = [
+    [-10, 0, 0, -10],
+    [0, 10, 10, 0],
+    [0, 10, 10, 0],
+    [0, 10, 10, 0],
+    [-10, 0, 0, -10],
+]
+PIECE_TABLES = {'pawn': PAWN_TABLE, 'knight': KNIGHT_TABLE, 'bishop': BISHOP_TABLE, 'rook': ROOK_TABLE}
+
+# Mobility: points for every square a piece can move to
+MOBILITY_BONUS = {'knight': 4, 'bishop': 4, 'rook': 2}
+# King safety: penalty for every attack by an enemy piece on the king's square or a square next to it
+KING_ZONE_ATTACK_PENALTY = 10
+
+# How far the game is from the endgame: knights and bishops count 1, rooks 2.
+# The king's table slides from the middlegame one (all 8) to the endgame one (0).
+PHASE_WEIGHTS = {'knight': 1, 'bishop': 1, 'rook': 2}
+MAX_PHASE = 8
+
+
+def on_board(r, c):
+    return 0 <= r < ROWS and 0 <= c < COLS
+
+
+def build_square_scores():
+    """Material plus table bonus for every piece on every square, signed (+ White, - Black).
+
+    Worked out once here so evaluating a position is just a lookup per piece.
+    """
+    scores = {}
+    for kind, table in PIECE_TABLES.items():
+        scores["white_" + kind] = [[PIECE_VALUES[kind] + table[r][c] for c in range(COLS)] for r in range(ROWS)]
+        scores["black_" + kind] = [[-(PIECE_VALUES[kind] + table[ROWS - 1 - r][COLS - 1 - c])
+                                    for c in range(COLS)] for r in range(ROWS)]
+    return scores
+
+
+def build_rays():
+    """For every square and piece type, the lines of squares it attacks along (nearest first).
+
+    A knight's "lines" are single squares; a rook or bishop stops at the first piece in each line.
+    """
+    rays = {}
+    for r in range(ROWS):
+        for c in range(COLS):
+            rays['knight', r, c] = [[(r + dr, c + dc)] for dr, dc in KNIGHT_OFFSETS if on_board(r + dr, c + dc)]
+            for kind, directions in (('rook', ROOK_DIRECTIONS), ('bishop', BISHOP_DIRECTIONS)):
+                lines = []
+                for dr, dc in directions:
+                    line, nr, nc = [], r + dr, c + dc
+                    while on_board(nr, nc):
+                        line.append((nr, nc))
+                        nr, nc = nr + dr, nc + dc
+                    if line:
+                        lines.append(line)
+                rays[kind, r, c] = lines
+    return rays
+
+
+SQUARE_SCORES = build_square_scores()
+RAYS = build_rays()
+# The king's square and the squares around it
+KING_ZONES = {(r, c): {(r + dr, c + dc) for dr in (-1, 0, 1) for dc in (-1, 0, 1) if on_board(r + dr, c + dc)}
+              for r in range(ROWS) for c in range(COLS)}
+
 
 @lru_cache(maxsize=1000)
 def get_piece_value(piece):
@@ -24,25 +135,73 @@ def get_piece_value(piece):
         return 0
     return PIECE_VALUES.get(piece.split('_')[1], 0)
 
+
+def king_square_score(table_row, table_col, phase):
+    """The king's table bonus, blended between middlegame and endgame by the game phase"""
+    middlegame = KING_MIDDLEGAME_TABLE[table_row][table_col]
+    endgame = KING_ENDGAME_TABLE[table_row][table_col]
+    return (middlegame * phase + endgame * (MAX_PHASE - phase)) // MAX_PHASE
+
+
 def evaluate_board(game_state):
-    """Evaluate board position: Positive = good for White, Negative = good for Black"""
-    # Material evaluation
-    score = sum(
-        get_piece_value(piece) if piece.startswith("white") else -get_piece_value(piece)
-        for row in game_state.board for piece in row if piece != "--"
-    )
+    """Evaluate board position: Positive = good for White, Negative = good for Black.
+
+    The score is in centipawns and always a whole number. For each side it adds up:
+    - material and piece-square tables (how much each piece is worth where it stands)
+    - mobility: a small bonus for each square a knight, bishop or rook can move to
+    - king safety: a penalty for each enemy attack on the squares around the king
+    """
+    board = game_state.board
+    zones = {"white": KING_ZONES[game_state.white_king_location],
+             "black": KING_ZONES[game_state.black_king_location]}
+    score = 0
+    phase = 0
+    for r in range(ROWS):
+        for c in range(COLS):
+            piece = board[r][c]
+            if piece == "--" or piece.endswith("king"):
+                continue
+            score += SQUARE_SCORES[piece][r][c]
+            color, kind = piece.split("_")
+            if kind == "pawn":
+                continue
+            phase += PHASE_WEIGHTS[kind]
+
+            enemy_zone = zones["black" if color == "white" else "white"]
+            reachable = zone_attacks = 0
+            for line in RAYS[kind, r, c]:
+                for square in line:
+                    if square in enemy_zone:
+                        zone_attacks += 1
+                    target = board[square[0]][square[1]]
+                    if target == "--":
+                        reachable += 1
+                        continue
+                    if not target.startswith(color):
+                        reachable += 1
+                    break
+            # Attacks near the enemy king count against that king, i.e. in this piece's favour
+            bonus = MOBILITY_BONUS[kind] * reachable + KING_ZONE_ATTACK_PENALTY * zone_attacks
+            score += bonus if color == "white" else -bonus
+
+    phase = min(phase, MAX_PHASE)  # a promoted pawn can push it past the start
+    wr, wc = game_state.white_king_location
+    br, bc = game_state.black_king_location
+    score += king_square_score(wr, wc, phase)
+    score -= king_square_score(ROWS - 1 - br, COLS - 1 - bc, phase)
     return score
+
 
 def move_priority(move):
     """How promising a move looks before searching it (higher = search it earlier)"""
     priority = 0
     if move.piece_captured != "--":
         # Capture the most valuable piece, preferably with the least valuable one
-        attacker = 0 if move.piece_moved.endswith("king") else get_piece_value(move.piece_moved)
-        priority += 100 + 10 * get_piece_value(move.piece_captured) - attacker
+        priority += 10000 + 10 * get_piece_value(move.piece_captured) - get_piece_value(move.piece_moved)
     if move.is_promotion:
-        priority += 50 + PIECE_VALUES[move.promotion_piece]
+        priority += 5000 + PIECE_VALUES[move.promotion_piece]
     return priority
+
 
 def order_moves(moves):
     """Sort moves so captures and promotions come first.

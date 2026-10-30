@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-from ai import get_ai_move, DIFFICULTY_DEPTHS
+from ai import get_ai_move, evaluate_board, DIFFICULTY_DEPTHS, MATE_SCORE
 from chess_engine import GameState
 from helpers import position, square
 
@@ -73,3 +73,46 @@ def test_same_seed_gives_same_move():
     a = get_ai_move(GameState(), "medium", rng=random.Random(7))
     b = get_ai_move(GameState(), "medium", rng=random.Random(7))
     assert a == b
+
+
+def turned_around(gs):
+    """The same position seen from the other side: board rotated, colors swapped"""
+    swap = {"white": "black", "black": "white"}
+    board = [[piece if piece == "--" else swap[piece.split("_")[0]] + "_" + piece.split("_")[1]
+              for piece in reversed(row)] for row in reversed(gs.board)]
+    return GameState(board=board, white_to_move=not gs.white_to_move)
+
+
+def test_start_position_is_even():
+    assert evaluate_board(GameState()) == 0
+
+
+def test_evaluation_treats_both_sides_the_same():
+    rng = random.Random(5)
+    for _ in range(50):
+        gs = GameState()
+        for _ in range(rng.randrange(1, 20)):
+            moves = gs.get_valid_moves()
+            if not moves:
+                break
+            gs.make_move(rng.choice(moves))
+        score = evaluate_board(gs)
+        assert isinstance(score, int)
+        assert evaluate_board(turned_around(gs)) == -score
+
+
+def test_evaluation_rewards_better_squares():
+    # A centralised knight beats one in the corner; an advanced pawn beats one at home
+    corner = position({"a5": "black_king", "d1": "white_king", "a1": "white_knight"})
+    center = position({"a5": "black_king", "d1": "white_king", "b3": "white_knight"})
+    assert evaluate_board(center) > evaluate_board(corner)
+    home = position({"a5": "black_king", "d1": "white_king", "d2": "white_pawn"})
+    advanced = position({"a5": "black_king", "d1": "white_king", "d4": "white_pawn"})
+    assert evaluate_board(advanced) > evaluate_board(home)
+
+
+def test_mate_scores_dwarf_normal_scores():
+    # Even a huge material edge (two rooks, bishop and knight against a bare king) is far below a mate
+    gs = position({"a5": "black_king", "d1": "white_king", "a1": "white_rook", "b1": "white_rook",
+                   "c2": "white_bishop", "b3": "white_knight"})
+    assert abs(evaluate_board(gs)) < MATE_SCORE // 10
