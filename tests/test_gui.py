@@ -189,3 +189,35 @@ def test_n_goes_back_to_the_menu(app):
     press(app, pygame.K_n)
     assert app.in_menu
     app.draw()
+
+
+def screen_square(app, name):
+    """(column, row) of a square on the screen, counted from the top left"""
+    rect = app.square_rect(*square(name))
+    return (rect.x - gui.BOARD_X) // gui.SQUARE_SIZE, (rect.y - gui.BOARD_Y) // gui.SQUARE_SIZE
+
+
+def test_board_is_seen_from_whites_side_when_playing_white(app):
+    assert not app.flipped
+    assert screen_square(app, "a1") == (0, 4) and screen_square(app, "d5") == (3, 0)
+
+
+@pytest.mark.parametrize("two_players, flipped", [(False, True), (True, False)])
+def test_board_flips_when_playing_black_against_the_computer(menu, two_players, flipped):
+    menu.human_is_white, menu.two_players = False, two_players
+    menu.start_game()
+    assert menu.flipped == flipped
+    if flipped:
+        assert screen_square(menu, "a5") == (3, 4) and screen_square(menu, "d1") == (0, 0)
+
+
+def test_clicks_find_the_right_square_when_flipped(menu):
+    menu.human_is_white = False
+    menu.start_game()
+    for r in range(gui.ROWS):
+        for c in range(gui.COLS):
+            assert menu.square_at(menu.square_rect(r, c).center) == (r, c)
+    menu.update()  # the AI plays White's first move
+    wait_for_ai(menu)
+    click(menu, "b5")
+    assert menu.selected == square("b5")

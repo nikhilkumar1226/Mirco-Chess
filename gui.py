@@ -153,6 +153,8 @@ class ChessGUI:
         self.move_log = []  # every move played, so U can take moves back
         self.selected = None  # (row, col) of the piece the player picked up
         self.promotion_choices = None  # the moves to pick from while the promotion picker is open
+        # Show the board from Black's side when playing Black against the computer
+        self.flipped = not self.two_players and not self.human_is_white
         self.cancel_ai()
         self.refresh()
 
@@ -297,13 +299,17 @@ class ChessGUI:
     # ---- board geometry ---------------------------------------------------
 
     def square_rect(self, r, c):
+        """Where square (row, col) is drawn on the screen"""
+        if self.flipped:  # turned around, so a5 is bottom right
+            r, c = ROWS - 1 - r, COLS - 1 - c
         return pygame.Rect(BOARD_X + c * SQUARE_SIZE, BOARD_Y + r * SQUARE_SIZE, SQUARE_SIZE, SQUARE_SIZE)
 
     def square_at(self, pos):
         """The (row, col) under a screen position, or None if it's off the board"""
         x, y = pos[0] - BOARD_X, pos[1] - BOARD_Y
         if 0 <= x < BOARD_WIDTH and 0 <= y < BOARD_HEIGHT:
-            return y // SQUARE_SIZE, x // SQUARE_SIZE
+            r, c = y // SQUARE_SIZE, x // SQUARE_SIZE
+            return (ROWS - 1 - r, COLS - 1 - c) if self.flipped else (r, c)
         return None
 
     def board_rect(self):
