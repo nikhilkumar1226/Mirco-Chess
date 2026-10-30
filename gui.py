@@ -11,7 +11,7 @@ import threading
 import pygame
 
 from ai import get_ai_move
-from chess_engine import GameState, ROWS, COLS, EMPTY
+from chess_engine import GameState, ROWS, COLS, EMPTY, CASTLING_SQUARES
 
 # Layout, in pixels
 SQUARE_SIZE = 80
@@ -25,6 +25,7 @@ CAPTURED_SIZE = 28  # captured pieces are shown small
 WIDTH = SIDE_PANEL_X + SIDE_PANEL_WIDTH + 16
 HEIGHT = BOARD_Y + BOARD_HEIGHT + 32 + STATUS_HEIGHT
 FPS = 60
+ANIMATION_MS = 160  # how long a piece takes to slide to its new square
 
 # Colors
 DARK_SQUARE = pygame.Color("#96b68d")
@@ -180,6 +181,7 @@ class ChessGUI:
         self.move_texts = []  # the same moves as written in the move list, e.g. "d2-d3+"
         self.selected = None  # (row, col) of the piece the player picked up
         self.promotion_choices = None  # the moves to pick from while the promotion picker is open
+        self.animation = None  # (move, start time in ms) while a move is sliding into place
         # Show the board from Black's side when playing Black against the computer
         self.flipped = not self.two_players and not self.human_is_white
         self.cancel_ai()
@@ -194,6 +196,7 @@ class ChessGUI:
 
     def play(self, move):
         self.gs.make_move(move)
+        self.animation = (move, pygame.time.get_ticks())
         self.move_log.append(move)
         self.selected = None
         self.promotion_choices = None
@@ -210,6 +213,7 @@ class ChessGUI:
         for _ in range(count):
             self.gs.undo_move(self.move_log.pop())
             self.move_texts.pop()
+        self.animation = None
         self.cancel_ai()
         self.selected = None
         self.promotion_choices = None
@@ -263,9 +267,32 @@ class ChessGUI:
         self.search_id += 1
         self.ai_thinking = False
 
+    def sliding_pieces(self):
+        """The pieces still sliding to their new squares and how far along they are (0 to 1).
+
+        Returns ([(piece, from square, to square), ...], progress); the list is empty
+        when nothing is moving. Castling slides the rook too.
+        """
+        if self.animation is None:
+            return [], 1
+        move, start_time = self.animation
+        elapsed = pygame.time.get_ticks() - start_time
+        if elapsed >= ANIMATION_MS:
+            return [], 1
+        pieces = [(move.piece_moved, (move.start_row, move.start_col), (move.end_row, move.end_col))]
+        if move.is_castle:
+            color = move.piece_moved.split("_")[0]
+            _, _, rook_from, rook_to = CASTLING_SQUARES[color]
+            pieces.append((f"{color}_rook", rook_from, rook_to))
+        t = elapsed / ANIMATION_MS
+        return pieces, 1 - (1 - t) ** 3  # ease out: fast at first, then settle
+
     def update(self):
         """Once per frame: play the AI's move when it is ready, or start the AI when it's its turn"""
-        while not self.ai_results.empty():
+        if self.animation and not self.sliding_pieces()[0]:
+            self.animation = None
+        # Wait for the last move to finish sliding before showing the AI's reply
+        while self.animation is None and not self.ai_results.empty():
             search_id, ai_move = self.ai_results.get()
             if search_id == self.search_id:
                 self.ai_thinking = False
@@ -476,12 +503,21 @@ class ChessGUI:
             king = self.gs.white_king_location if self.gs.white_to_move else self.gs.black_king_location
             self.screen.blit(self.check_overlay, self.square_rect(*king))
 
+        # A moving piece is drawn on its way, not on its new square; anything it
+        # captures stays visible until the piece arrives
+        sliding, progress = self.sliding_pieces()
+        arriving = {to_square for _, _, to_square in sliding}
         for r in range(ROWS):
             for c in range(COLS):
-                piece = self.gs.board[r][c]
+                piece = self.animation[0].piece_captured if (r, c) in arriving else self.gs.board[r][c]
                 if piece != EMPTY:
                     image = self.images[piece]
                     self.screen.blit(image, image.get_rect(center=self.square_rect(r, c).center))
+        for piece, from_square, to_square in sliding:
+            (x1, y1), (x2, y2) = self.square_rect(*from_square).center, self.square_rect(*to_square).center
+            center = (x1 + (x2 - x1) * progress, y1 + (y2 - y1) * progress)
+            image = self.images[piece]
+            self.screen.blit(image, image.get_rect(center=center))
 
         if self.selected:
             for move in self.moves_from(self.selected):

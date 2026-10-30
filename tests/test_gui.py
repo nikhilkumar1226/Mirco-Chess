@@ -12,7 +12,9 @@ from helpers import position, square, find_move  # noqa: E402
 
 
 @pytest.fixture
-def menu():
+def menu(monkeypatch):
+    # Moves appear at once, so tests don't have to wait for pieces to slide
+    monkeypatch.setattr(gui, "ANIMATION_MS", 0)
     app = gui.ChessGUI()
     yield app
     pygame.quit()
@@ -275,3 +277,40 @@ def test_long_games_fit_in_the_move_list(menu):
         click(menu, start)
         click(menu, end)
     menu.draw()
+
+
+def test_moves_slide_into_place(app, monkeypatch):
+    monkeypatch.setattr(gui, "ANIMATION_MS", 10_000)
+    click(app, "a1")
+    click(app, "a4")
+    pieces, progress = app.sliding_pieces()
+    assert pieces == [("white_rook", square("a1"), square("a4"))] and 0 <= progress < 1
+    app.draw()
+
+    # The AI's reply waits until the rook has arrived
+    app.update()
+    wait_for_ai(app)
+    assert len(app.move_log) == 1
+    monkeypatch.setattr(gui, "ANIMATION_MS", 0)
+    app.update()
+    assert len(app.move_log) == 2
+
+
+def test_castling_slides_the_rook_too(menu, monkeypatch):
+    menu.two_players = True
+    menu.start_game()
+    load(menu, position({"d5": "black_king", "a1": "white_rook", "d1": "white_king"}))
+    monkeypatch.setattr(gui, "ANIMATION_MS", 10_000)
+    click(menu, "d1")
+    click(menu, "b1")
+    pieces, _ = menu.sliding_pieces()
+    assert pieces == [("white_king", square("d1"), square("b1")), ("white_rook", square("a1"), square("c1"))]
+    menu.draw()
+
+
+def test_undo_stops_the_animation(app, monkeypatch):
+    monkeypatch.setattr(gui, "ANIMATION_MS", 10_000)
+    click(app, "a1")
+    click(app, "a4")
+    press(app, pygame.K_u)
+    assert app.animation is None and app.sliding_pieces() == ([], 1)
