@@ -19,7 +19,10 @@ PIECE_SIZE = 64
 BOARD_X, BOARD_Y = 36, 20  # top-left corner of the board; the margins hold the coordinates
 BOARD_WIDTH, BOARD_HEIGHT = COLS * SQUARE_SIZE, ROWS * SQUARE_SIZE
 STATUS_HEIGHT = 48
-WIDTH = BOARD_X + BOARD_WIDTH + 20
+SIDE_PANEL_X = BOARD_X + BOARD_WIDTH + 20  # the move list and captured pieces, right of the board
+SIDE_PANEL_WIDTH = 196
+CAPTURED_SIZE = 28  # captured pieces are shown small
+WIDTH = SIDE_PANEL_X + SIDE_PANEL_WIDTH + 16
 HEIGHT = BOARD_Y + BOARD_HEIGHT + 32 + STATUS_HEIGHT
 FPS = 60
 
@@ -29,6 +32,8 @@ LIGHT_SQUARE = pygame.Color("#c8d6c9")
 BACKGROUND = pygame.Color("#262b25")
 STATUS_BACKGROUND = pygame.Color("#1c201b")
 PANEL = pygame.Color("#eef2ec")
+SIDE_PANEL = pygame.Color("#2f362d")
+LATEST_MOVE = pygame.Color("#3e483b")
 TEXT = pygame.Color("#e6ece4")
 DARK_TEXT = pygame.Color("#1f2a1d")
 MUTED_TEXT = pygame.Color("#97a394")
@@ -57,6 +62,11 @@ MENU_CHOICES = [
 ]
 MENU_WIDTH = 312
 
+# For the move list (c4-c5=R) and the material count next to the captured pieces
+PIECE_LETTERS = {"rook": "R", "bishop": "B", "knight": "N"}
+MATERIAL = {"pawn": 1, "knight": 3, "bishop": 3, "rook": 5, "king": 0}
+CAPTURE_ORDER = ["rook", "bishop", "knight", "pawn"]
+
 DRAW_TEXT = {
     "stalemate": ("Stalemate", "It's a draw"),
     "repetition": ("Draw", "Threefold repetition"),
@@ -64,13 +74,28 @@ DRAW_TEXT = {
 }
 
 
-def load_piece_images():
-    """Load images/<piece>.png for every piece, scaled to fit a square"""
+def load_piece_images(size):
+    """Load images/<piece>.png for every piece, scaled to size x size pixels"""
     images = {}
     for name in PIECE_NAMES:
         image = pygame.image.load(os.path.join(IMAGE_DIR, f"{name}.png")).convert_alpha()
-        images[name] = pygame.transform.smoothscale(image, (PIECE_SIZE, PIECE_SIZE))
+        images[name] = pygame.transform.smoothscale(image, (size, size))
     return images
+
+
+def square_name(r, c):
+    return f"{FILES[c]}{ROWS - r}"
+
+
+def move_notation(move):
+    """The move for the move list: d2-d3, a1xa4 (a capture), c4-c5=R (promotion) or O-O (castling)"""
+    if move.is_castle:
+        return "O-O"
+    separator = "x" if move.piece_captured != EMPTY else "-"
+    text = square_name(move.start_row, move.start_col) + separator + square_name(move.end_row, move.end_col)
+    if move.is_promotion:
+        text += "=" + PIECE_LETTERS[move.promotion_piece]
+    return text
 
 
 def translucent_square(rgba):
@@ -111,7 +136,8 @@ class ChessGUI:
         pygame.display.set_caption("Micro Chess")
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
         self.clock = pygame.time.Clock()
-        self.images = load_piece_images()
+        self.images = load_piece_images(PIECE_SIZE)
+        self.small_images = load_piece_images(CAPTURED_SIZE)
         self.font = pygame.font.Font(None, 28)
         self.small_font = pygame.font.Font(None, 22)
         self.big_font = pygame.font.Font(None, 44)
@@ -151,6 +177,7 @@ class ChessGUI:
     def new_game(self):
         self.gs = GameState()
         self.move_log = []  # every move played, so U can take moves back
+        self.move_texts = []  # the same moves as written in the move list, e.g. "d2-d3+"
         self.selected = None  # (row, col) of the piece the player picked up
         self.promotion_choices = None  # the moves to pick from while the promotion picker is open
         # Show the board from Black's side when playing Black against the computer
@@ -171,6 +198,8 @@ class ChessGUI:
         self.selected = None
         self.promotion_choices = None
         self.refresh()
+        suffix = "#" if self.result == "checkmate" else "+" if self.check else ""
+        self.move_texts.append(move_notation(move) + suffix)
 
     def undo(self):
         """Take back your last move and the AI's reply to it (one move in a 2-player game)"""
@@ -180,6 +209,7 @@ class ChessGUI:
             return
         for _ in range(count):
             self.gs.undo_move(self.move_log.pop())
+            self.move_texts.pop()
         self.cancel_ai()
         self.selected = None
         self.promotion_choices = None
@@ -190,6 +220,26 @@ class ChessGUI:
 
     def moves_from(self, square):
         return [m for m in self.valid_moves if (m.start_row, m.start_col) == square]
+
+    def move_list(self):
+        """Rows for the move list: ("1.", White's move, Black's move or "")"""
+        rows = []
+        for i in range(0, len(self.move_texts), 2):
+            black = self.move_texts[i + 1] if i + 1 < len(self.move_texts) else ""
+            rows.append((f"{i // 2 + 1}.", self.move_texts[i], black))
+        return rows
+
+    def captured_pieces(self):
+        """(pieces White has captured, pieces Black has captured), most valuable first"""
+        captured = sorted((m.piece_captured for m in self.move_log if m.piece_captured != EMPTY),
+                          key=lambda piece: CAPTURE_ORDER.index(piece.split("_")[1]))
+        return ([p for p in captured if p.startswith("black")],
+                [p for p in captured if p.startswith("white")])
+
+    def material_balance(self):
+        """White's material minus Black's (pawn = 1, knight and bishop = 3, rook = 5)"""
+        return sum(MATERIAL[piece.split("_")[1]] * (1 if piece.startswith("white") else -1)
+                   for row in self.gs.board for piece in row if piece != EMPTY)
 
     # ---- AI ---------------------------------------------------------------
 
@@ -370,6 +420,7 @@ class ChessGUI:
             return
         self.draw_board()
         self.draw_coordinates()
+        self.draw_side_panel()
         self.draw_status()
         if self.promotion_choices:
             self.draw_promotion_picker()
@@ -446,6 +497,40 @@ class ChessGUI:
             label = self.small_font.render(FILES[c], True, MUTED_TEXT)
             rect = self.square_rect(ROWS - 1, c)
             self.screen.blit(label, label.get_rect(center=(rect.centerx, BOARD_Y + BOARD_HEIGHT + 16)))
+
+    def draw_side_panel(self):
+        area = pygame.Rect(SIDE_PANEL_X, BOARD_Y, SIDE_PANEL_WIDTH, BOARD_HEIGHT)
+        pygame.draw.rect(self.screen, SIDE_PANEL, area, border_radius=12)
+        left = area.x + 14
+        self.screen.blit(self.small_font.render("MOVES", True, MUTED_TEXT), (left, area.y + 14))
+
+        # Captured pieces at the bottom, one row per side, with the material count for the side ahead
+        captured_top = area.bottom - 106
+        pygame.draw.line(self.screen, BACKGROUND, (left, captured_top), (area.right - 14, captured_top), 2)
+        self.screen.blit(self.small_font.render("CAPTURED", True, MUTED_TEXT), (left, captured_top + 12))
+        balance = self.material_balance()
+        for i, (pieces, lead) in enumerate(zip(self.captured_pieces(), (balance, -balance))):
+            y = captured_top + 36 + i * 32
+            x = left
+            for piece in pieces:
+                self.screen.blit(self.small_images[piece], (x, y))
+                x += CAPTURED_SIZE - 6  # overlap a little so up to six pieces fit
+            if lead > 0:
+                label = self.small_font.render(f"+{lead}", True, MUTED_TEXT)
+                self.screen.blit(label, label.get_rect(midleft=(x + 10, y + CAPTURED_SIZE // 2)))
+
+        # The move list fills the rest; once it's full, the oldest moves scroll off the top
+        line_height = 26
+        list_top = area.y + 40
+        rows = self.move_list()[-((captured_top - 8 - list_top) // line_height):]
+        for i, (number, white, black) in enumerate(rows):
+            y = list_top + i * line_height
+            if i == len(rows) - 1:  # the latest pair of moves
+                pygame.draw.rect(self.screen, LATEST_MOVE, (left - 6, y - 4, area.width - 16, line_height - 2),
+                                 border_radius=6)
+            columns = ((left, number, MUTED_TEXT), (left + 34, white, TEXT), (left + 104, black, TEXT))
+            for x, text, color in columns:
+                self.screen.blit(self.small_font.render(text, True, color), (x, y))
 
     def draw_status(self):
         bar = pygame.Rect(0, HEIGHT - STATUS_HEIGHT, WIDTH, STATUS_HEIGHT)

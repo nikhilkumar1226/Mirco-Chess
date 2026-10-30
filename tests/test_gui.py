@@ -8,7 +8,7 @@ os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
 pygame = pytest.importorskip("pygame")
 
 import gui  # noqa: E402  (needs the environment variables above)
-from helpers import position, square  # noqa: E402
+from helpers import position, square, find_move  # noqa: E402
 
 
 @pytest.fixture
@@ -50,6 +50,7 @@ def wait_for_ai(app):
 def load(app, gs):
     app.gs = gs
     app.move_log = []
+    app.move_texts = []
     app.refresh()
 
 
@@ -221,3 +222,56 @@ def test_clicks_find_the_right_square_when_flipped(menu):
     wait_for_ai(menu)
     click(menu, "b5")
     assert menu.selected == square("b5")
+
+
+def test_move_notation():
+    gs = position({"a5": "black_king", "a4": "black_pawn", "c4": "white_pawn",
+                   "a1": "white_rook", "d1": "white_king"})
+    moves = gs.get_valid_moves()
+    assert gui.move_notation(find_move(moves, "d1", "d2")[0]) == "d1-d2"
+    assert gui.move_notation(find_move(moves, "a1", "a4")[0]) == "a1xa4"
+    assert gui.move_notation(find_move(moves, "c4", "c5")[0]) == "c4-c5=R"
+    assert gui.move_notation(find_move(moves, "d1", "b1")[0]) == "O-O"
+
+
+def test_move_list_pairs_moves_by_number(menu):
+    menu.two_players = True
+    menu.start_game()
+    for start, end in [("d2", "d3"), ("b5", "c3"), ("d1", "c2")]:  # the knight checks, the king steps away
+        click(menu, start)
+        click(menu, end)
+    assert menu.move_list() == [("1.", "d2-d3", "b5-c3+"), ("2.", "d1-c2", "")]
+    menu.draw()
+    press(menu, pygame.K_u)
+    assert menu.move_list() == [("1.", "d2-d3", "b5-c3+")]
+
+
+def test_checkmate_is_marked_in_the_move_list(app):
+    load(app, position({"a5": "black_king", "b3": "white_king", "c4": "white_pawn"}))
+    click(app, "c4")
+    click(app, "c5")
+    click_at(app, app.promotion_options()[0][0].center)
+    assert app.move_list() == [("1.", "c4-c5=R#", "")]
+
+
+def test_captured_pieces_and_material(menu):
+    menu.two_players = True
+    menu.start_game()
+    for start, end in [("a1", "a4"), ("a5", "a4")]:  # rook takes pawn, king takes rook
+        click(menu, start)
+        click(menu, end)
+    assert menu.captured_pieces() == (["black_pawn"], ["white_rook"])
+    assert menu.material_balance() == -4
+    menu.draw()
+
+
+def test_long_games_fit_in_the_move_list(menu):
+    menu.two_players = True
+    menu.start_game()
+    knight_dance = [("c1", "a2"), ("b5", "a3"), ("a2", "c1"), ("a3", "b5")] * 2
+    for start, end in knight_dance + [("c1", "a2"), ("b5", "a3")] * 6:
+        if menu.result:
+            break
+        click(menu, start)
+        click(menu, end)
+    menu.draw()
