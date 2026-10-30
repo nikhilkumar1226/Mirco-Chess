@@ -51,6 +51,8 @@ def move_to_notation(move):
     end_notation = cols[move.end_col] + str(ROWS - move.end_row)
     if move.is_promotion:
         return f"{start_notation} {end_notation} (promotes to {move.promotion_piece})"
+    if move.is_castle:
+        return f"{start_notation} {end_notation} (castles)"
     return f"{start_notation} {end_notation}"
 
 PROMOTION_CHOICES = {"r": "rook", "b": "bishop", "n": "knight"}
@@ -100,6 +102,7 @@ def main():
 
     print("Welcome to Terminal Micro Chess!")
     print("Moves format: 'a2 a3' (from-square to-square). Files: a-d, Ranks: 1-5")
+    print("To castle, type the king's move: 'd1 b1' for White, 'a5 c5' for Black.")
     print("Enter 'quit' to exit.\n")
 
     human_color = ask_choice("Play as", ["white", "black"], "white")
