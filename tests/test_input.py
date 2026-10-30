@@ -1,6 +1,6 @@
 import pytest
 
-from main import parse_move
+from play_terminal import parse_move
 
 
 def test_valid_move_is_parsed():

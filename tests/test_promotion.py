@@ -1,6 +1,6 @@
 from ai import get_ai_move
 from helpers import position, square, find_move
-from main import find_legal_moves
+from play_terminal import find_legal_moves
 
 
 def test_pawn_can_promote_to_rook_bishop_or_knight():
@@ -24,7 +24,7 @@ def test_promotion_by_capture_and_for_black():
 
 
 def test_human_pawn_promotes_in_terminal_game():
-    # This is the path main.py uses for the human's move
+    # This is the path play_terminal.py uses for the human's move
     gs = position({"a5": "black_king", "d1": "white_king", "c4": "white_pawn"})
     legal = find_legal_moves(gs, square("c4"), square("c5"))
     assert len(legal) == 3

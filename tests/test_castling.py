@@ -5,7 +5,7 @@ import pytest
 from ai import get_ai_move
 from chess_engine import GameState
 from helpers import position, square, find_move
-from main import find_legal_moves
+from play_terminal import find_legal_moves
 
 
 def castles(gs):
