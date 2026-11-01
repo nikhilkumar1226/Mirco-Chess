@@ -550,6 +550,101 @@ def test_quitting_without_being_asked(app):
     assert not app.running and not app.confirming_quit
 
 
+class FakeTime:
+    """Stands in for pygame's millisecond counter, so a test can move time on"""
+
+    def __init__(self):
+        self.now = 0
+
+    def __call__(self):
+        return self.now
+
+
+@pytest.fixture
+def timed(app):
+    """The game against the AI with a 1-minute clock, and the fake time it runs on"""
+    time = FakeTime()
+    app.ticks = time
+    app.set_clock(1)
+    return app, time
+
+
+def test_no_clock_unless_one_is_chosen(app):
+    assert app.settings["clock"] == 0 and app.clock_ms is None
+    app.update()
+    app.draw()
+
+
+def test_the_clock_runs_for_the_side_to_move(timed):
+    app, time = timed
+    time.now = 1500
+    app.update()
+    assert app.clock_ms == {"white": 58_500, "black": 60_000}
+    click(app, "a1")
+    click(app, "a4")
+    time.now = 4000
+    app.update()  # Black (the AI) is thinking now
+    assert app.clock_ms == {"white": 58_500, "black": 57_500}
+    app.draw()
+    wait_for_ai(app)
+
+
+def test_the_clock_stops_while_settings_are_open(timed):
+    app, time = timed
+    app.open_settings()
+    time.now = 5000
+    app.update()
+    press(app, pygame.K_ESCAPE)
+    app.update()
+    assert app.clock_ms["white"] == 60_000
+
+
+def test_running_out_of_time_loses(timed):
+    app, time = timed
+    click(app, "a1")
+    click(app, "a4")
+    app.update()
+    wait_for_ai(app)
+    time.now = 61_000  # White has used up the minute
+    app.update()
+    assert app.result == "time" and app.clock_ms["white"] == 0
+    assert gui.game_over_text(app.result, app.gs.white_to_move) == ("Time's up!", "Black wins on time")
+    press(app, pygame.K_u)  # a game lost on time can't be taken back
+    assert len(app.move_log) == 2 and app.result == "time"
+    app.update()
+    assert not app.ai_thinking
+    app.draw()
+
+
+def test_running_out_of_time_is_a_draw_if_the_other_side_has_only_a_king(timed):
+    app, time = timed
+    load(app, position({"a5": "black_king", "d1": "white_king", "d2": "white_rook"}))
+    time.now = 61_000
+    app.update()
+    assert app.result == "time_draw"
+    app.draw()
+
+
+def test_choosing_a_clock_in_settings_restarts_it(timed):
+    app, time = timed
+    time.now = 10_000
+    app.update()
+    app.open_settings()
+    click_at(app, next(rect for rect, minutes in app.clock_choice_rects() if minutes == 5).center)
+    assert app.clock_ms == {"white": 300_000, "black": 300_000}
+    app.draw()
+    click_at(app, next(rect for rect, minutes in app.clock_choice_rects() if minutes == 0).center)
+    assert app.clock_ms is None
+    assert gui.ChessGUI().settings["clock"] == 0
+
+
+def test_clock_text():
+    assert gui.clock_text(180_000) == "3:00"
+    assert gui.clock_text(65_400) == "1:06"
+    assert gui.clock_text(9_340) == "9.3"
+    assert gui.clock_text(0) == "0.0"
+
+
 def test_drag_a_piece_to_move_it(app, monkeypatch):
     monkeypatch.setattr(gui, "ANIMATION_MS", 10_000)
     drag(app, "a1", "a4")

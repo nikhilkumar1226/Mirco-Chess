@@ -100,6 +100,7 @@ Donut                              Pillars
 - A settings screen where you switch the extras on or off: sound, the legal-move dots, animations,
   the Hint button, board coordinates and the "Quit the game?" question. Your settings and your last
   choices on the start menu are remembered between launches
+- An optional chess clock (off unless you choose one)
 - Undo, restart, and a game-over screen with **Play again**
 - The computer thinks in a background thread, so the window never freezes
 - A terminal version that needs nothing but Python, with all four boards
@@ -151,6 +152,12 @@ and the difficulty, then click **Start game** or press Enter.
 
 The settings are saved in a small file, `.micro_chess.json`, in your home folder. Delete it to go
 back to the defaults.
+
+**Chess clock:** there's no clock unless you pick one in Settings: 1, 3, 5 or 10 minutes for each
+player. The running clock is lit up above the move list and turns red in the last 10 seconds. If
+your time runs out you lose, unless your opponent has only their king left, which makes it a draw.
+The clock stops while the settings or the "Quit the game?" question are open, and choosing a
+different clock during a game starts both clocks again.
 
 In the terminal version, type a move as two squares, such as `d2 d3`. To castle, type the king's
 move (`d1 b1` or `a5 c5`). Type `quit` to leave.

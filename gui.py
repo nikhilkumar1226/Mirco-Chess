@@ -83,8 +83,10 @@ SETTING_SWITCHES = [
     ("Hint button", "hints"),
     ("Board coordinates", "coordinates"),
     ("Ask before quitting a game", "confirm_quit"),
+    ("Chess clock (min)", "clock"),  # a row of choices instead of a switch
 ]
 SETTINGS_ROW_HEIGHT = 40
+CLOCK_CHOICES = [("Off", 0), ("1", 1), ("3", 3), ("5", 5), ("10", 10)]  # minutes for each player
 
 HINT_DIFFICULTY = "hard"  # hints come from the strongest search
 
@@ -97,7 +99,9 @@ DRAW_TEXT = {
     "stalemate": ("Stalemate", "It's a draw"),
     "repetition": ("Draw", "Threefold repetition"),
     "insufficient_material": ("Draw", "Insufficient material"),
+    "time_draw": ("Time's up!", "Draw: no pieces left to win"),
 }
+LOW_TIME_MS = 10_000  # a clock turns red when it gets this low
 
 
 def load_piece_images(size):
@@ -126,6 +130,18 @@ def move_notation(move, rows=ROWS):
     return text
 
 
+def clock_text(ms):
+    """A clock's time as minutes and seconds, or seconds and tenths in the last 10 seconds: 4:05, 9.3"""
+    if ms < LOW_TIME_MS:
+        return f"{ms / 1000:.1f}"
+    seconds = -(-ms // 1000)  # rounded up, so a fresh 3-minute clock shows 3:00
+    return f"{seconds // 60}:{seconds % 60:02d}"
+
+
+def has_only_king(board, color):
+    return all(not piece.startswith(color) or piece.endswith("king") for row in board for piece in row)
+
+
 def translucent_square(rgba, size):
     surface = pygame.Surface((size, size), pygame.SRCALPHA)
     surface.fill(rgba)
@@ -144,16 +160,19 @@ def check_glow(size):
 
 def game_over_text(result, white_to_move):
     """(title, detail) saying how the game ended (result comes from get_game_result())"""
+    # After a checkmate or a timeout, the side to move is the one that lost
+    winner = "Black" if white_to_move else "White"
     if result == "checkmate":
-        winner = "Black" if white_to_move else "White"
         return "Checkmate!", f"{winner} wins"
+    if result == "time":
+        return "Time's up!", f"{winner} wins on time"
     return DRAW_TEXT[result]
 
 
 def result_line(result, white_to_move):
     """How the game ended, in one line for the status bar"""
     title, detail = game_over_text(result, white_to_move)
-    if result == "checkmate":
+    if result in ("checkmate", "time"):
         return f"{title} {detail}"
     return f"{title} - {detail.lower()}"
 
@@ -204,6 +223,40 @@ class ChessGUI:
         self.in_settings = True
         self.dragging = None  # a piece being dragged goes back to its square
 
+    def set_clock(self, minutes):
+        """Choose the clock: both players start again with that many minutes (0 for no clock)"""
+        self.settings["clock"] = minutes
+        self.reset_clock()
+        self.save_settings()
+
+    def reset_clock(self):
+        minutes = self.settings["clock"]
+        self.clock_ms = {"white": minutes * 60_000, "black": minutes * 60_000} if minutes else None
+        self.last_tick = self.ticks()
+
+    def ticks(self):
+        """Milliseconds since the game started up (the clocks use this)"""
+        return pygame.time.get_ticks()
+
+    def clock_running(self):
+        """The clock of the side to move runs while a game is on and nothing is in front of the board"""
+        return (self.clock_ms is not None and self.result is None and not self.in_menu
+                and not self.in_settings and not self.confirming_quit)
+
+    def run_clock(self):
+        now = self.ticks()
+        elapsed, self.last_tick = now - self.last_tick, now
+        if not self.clock_running():
+            return
+        side = "white" if self.gs.white_to_move else "black"
+        self.clock_ms[side] = max(0, self.clock_ms[side] - elapsed)
+        if self.clock_ms[side] == 0:
+            # Out of time: a loss, unless the other side has nothing left to checkmate with
+            other = "black" if side == "white" else "white"
+            self.result = "time_draw" if has_only_king(self.gs.board, other) else "time"
+            self.selected = self.dragging = self.promotion_choices = self.hint = None
+            self.cancel_search()
+
     def toggle_setting(self, name):
         self.settings[name] = not self.settings[name]
         self.sounds.muted = not self.settings["sound"]
@@ -229,6 +282,7 @@ class ChessGUI:
         self.promotion_choices = None  # the moves to pick from while the promotion picker is open
         self.animation = None  # (move, start time in ms) while a move is sliding into place
         self.hint = None  # the move suggested when the player asks for a hint
+        self.reset_clock()
         # Show the board from Black's side when playing Black against the computer
         self.flipped = not self.two_players and not self.human_is_white
         self.cancel_search()
@@ -280,8 +334,8 @@ class ChessGUI:
         """Take back your last move and the AI's reply to it (one move in a 2-player game)"""
         # While the AI is thinking (or after you ended the game) only your move needs taking back
         count = 2 if self.is_human_turn() and not self.two_players else 1
-        if len(self.move_log) < count:
-            return
+        if len(self.move_log) < count or self.result in ("time", "time_draw"):
+            return  # (a game lost on time stays lost)
         for _ in range(count):
             self.gs.undo_move(self.move_log.pop())
             self.move_texts.pop()
@@ -392,11 +446,12 @@ class ChessGUI:
         return pieces, 1 - (1 - t) ** 3  # ease out: fast at first, then settle
 
     def update(self):
-        """Once per frame: play the AI's move when it is ready, or start the AI when it's its turn"""
+        """Once per frame: run the clock, play the AI's move when it is ready, or start the AI when it's its turn"""
+        self.run_clock()
         if self.animation and not self.sliding_pieces()[0]:
             self.animation = None
         # Wait for the last move to finish sliding before showing the AI's reply
-        while self.animation is None and not self.search_results.empty():
+        while self.animation is None and not self.search_results.empty() and self.result is None:
             search_id, kind, found = self.search_results.get()
             if search_id != self.search_id:
                 continue  # from a search that was cancelled
@@ -477,7 +532,11 @@ class ChessGUI:
                 self.in_settings = False
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             for rect, name in self.settings_rows():
-                if rect.collidepoint(event.pos):
+                if name == "clock":
+                    for choice, minutes in self.clock_choice_rects():
+                        if choice.collidepoint(event.pos):
+                            self.set_clock(minutes)
+                elif rect.collidepoint(event.pos):
                     self.toggle_setting(name)
             if self.done_button_rect().collidepoint(event.pos):
                 self.in_settings = False
@@ -656,6 +715,14 @@ class ChessGUI:
         return [(pygame.Rect(left, 92 + i * SETTINGS_ROW_HEIGHT, MENU_WIDTH, SETTINGS_ROW_HEIGHT - 6), name)
                 for i, (_, name) in enumerate(SETTING_SWITCHES)]
 
+    def clock_choice_rects(self):
+        """(rect, minutes) for each choice on the clock's row of the settings screen"""
+        row = next(rect for rect, name in self.settings_rows() if name == "clock")
+        width, gap = 38, 4
+        left = row.right - 10 - len(CLOCK_CHOICES) * width - (len(CLOCK_CHOICES) - 1) * gap
+        return [(pygame.Rect(left + i * (width + gap), row.y + 4, width, row.height - 8), minutes)
+                for i, (_, minutes) in enumerate(CLOCK_CHOICES)]
+
     def done_button_rect(self):
         rect = pygame.Rect(0, 0, 200, 48)
         rect.center = (WIDTH // 2, 448)
@@ -730,11 +797,19 @@ class ChessGUI:
         mouse = pygame.mouse.get_pos()
         labels = {name: label for label, name in SETTING_SWITCHES}
         for rect, name in self.settings_rows():
-            pygame.draw.rect(self.screen, CHOICE_HOVER if rect.collidepoint(mouse) else CHOICE, rect,
-                             border_radius=8)
+            hover = rect.collidepoint(mouse) and name != "clock"
+            pygame.draw.rect(self.screen, CHOICE_HOVER if hover else CHOICE, rect, border_radius=8)
             label = self.font.render(labels[name], True, TEXT)
             self.screen.blit(label, label.get_rect(midleft=(rect.x + 14, rect.centery)))
-            self.draw_switch(self.settings[name], pygame.Rect(rect.right - 14 - 44, rect.centery - 12, 44, 24))
+            if name != "clock":
+                self.draw_switch(self.settings[name], pygame.Rect(rect.right - 14 - 44, rect.centery - 12, 44, 24))
+        for (choice, minutes), (text, _) in zip(self.clock_choice_rects(), CLOCK_CHOICES):
+            chosen = self.settings["clock"] == minutes
+            fill = (BUTTON_HOVER if choice.collidepoint(mouse) else BUTTON) if chosen else \
+                (CHOICE_HOVER if choice.collidepoint(mouse) else BACKGROUND)
+            pygame.draw.rect(self.screen, fill, choice, border_radius=6)
+            label = self.small_font.render(text, True, TEXT)
+            self.screen.blit(label, label.get_rect(center=choice.center))
 
         button = self.done_button_rect()
         pygame.draw.rect(self.screen, BUTTON_HOVER if button.collidepoint(mouse) else BUTTON, button,
@@ -891,9 +966,14 @@ class ChessGUI:
                 label = self.small_font.render(f"+{lead}", True, MUTED_TEXT)
                 self.screen.blit(label, label.get_rect(midleft=(x + 10, y + CAPTURED_SIZE // 2)))
 
+        # The clocks, if there are any, go above the move list
+        list_top = area.y + 40
+        if self.clock_ms is not None:
+            self.draw_clocks(pygame.Rect(left, list_top, area.width - 28, 34))
+            list_top += 46
+
         # The move list fills the rest; once it's full, the oldest moves scroll off the top
         line_height = 26
-        list_top = area.y + 40
         rows = self.move_list()[-((captured_top - 8 - list_top) // line_height):]
         for i, (number, white, black) in enumerate(rows):
             y = list_top + i * line_height
@@ -903,6 +983,23 @@ class ChessGUI:
             columns = ((left, number, MUTED_TEXT), (left + 34, white, TEXT), (left + 104, black, TEXT))
             for x, text, color in columns:
                 self.screen.blit(self.small_font.render(text, True, color), (x, y))
+
+    def draw_clocks(self, rect):
+        """Each player's time left, side by side; the one that is running is lit up"""
+        width = (rect.width - 8) // 2
+        to_move = "white" if self.gs.white_to_move else "black"
+        for i, side in enumerate(("white", "black")):
+            box = pygame.Rect(rect.x + i * (width + 8), rect.y, width, rect.height)
+            running = side == to_move and self.result is None
+            pygame.draw.rect(self.screen, PANEL if running else BACKGROUND, box, border_radius=8)
+            # A white or black dot says whose clock it is
+            dot = (box.x + 11, box.centery)
+            pygame.draw.circle(self.screen, (250, 250, 245) if side == "white" else (20, 22, 20), dot, 5)
+            pygame.draw.circle(self.screen, MUTED_TEXT, dot, 5, 1)
+            ms = self.clock_ms[side]
+            color = CHECK_TEXT if ms < LOW_TIME_MS else DARK_TEXT if running else TEXT
+            label = self.font.render(clock_text(ms), True, color)
+            self.screen.blit(label, label.get_rect(midright=(box.right - 8, box.centery)))
 
     def draw_status(self):
         bar = pygame.Rect(0, HEIGHT - STATUS_HEIGHT, WIDTH, STATUS_HEIGHT)

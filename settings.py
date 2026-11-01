@@ -22,11 +22,13 @@ DEFAULTS = {
     "hints": True,
     "coordinates": True,
     "confirm_quit": True,
+    "clock": 0,  # minutes on each player's clock, or 0 for no clock
 }
 # Settings that can only take some values
 CHOICES = {
     "variant_key": tuple(VARIANTS),
     "difficulty": tuple(DIFFICULTY_DEPTHS),
+    "clock": (0, 1, 3, 5, 10),
 }
 
 
