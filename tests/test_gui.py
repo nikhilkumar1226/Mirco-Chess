@@ -29,7 +29,19 @@ def app(menu):
 
 
 def click_at(app, pos):
+    """Press and release the mouse button without moving"""
     app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=pos))
+    app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=pos))
+
+
+def drag(app, start, end, release=True):
+    """Drag the piece on square `start` to square `end` (names like "a1")"""
+    start_pos = app.square_rect(*square(start)).center
+    end_pos = app.square_rect(*square(end)).center
+    app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=start_pos))
+    app.handle_event(pygame.event.Event(pygame.MOUSEMOTION, pos=end_pos, rel=(0, 0), buttons=(1, 0, 0)))
+    if release:
+        app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=end_pos))
 
 
 def click(app, name):
@@ -45,7 +57,8 @@ def press(app, key):
 
 
 def wait_for_ai(app):
-    app.ai_thread.join(timeout=10)
+    """Wait for the background search (the AI's move or a hint) and use its answer"""
+    app.search_thread.join(timeout=10)
     app.update()
 
 
@@ -322,3 +335,136 @@ def test_m_toggles_sound(app):
     app.draw()
     press(app, pygame.K_m)
     assert not app.sounds.muted
+
+
+def test_drag_a_piece_to_move_it(app, monkeypatch):
+    monkeypatch.setattr(gui, "ANIMATION_MS", 10_000)
+    drag(app, "a1", "a4")
+    assert app.gs.board[1][0] == "white_rook" and app.move_texts == ["a1xa4+"]
+    assert app.animation is None  # a dropped piece is already in place, so it doesn't slide
+    assert app.dragging is None and app.selected is None
+
+
+def test_dragged_piece_follows_the_mouse(app):
+    drag(app, "a1", "a3", release=False)
+    assert app.dragging == square("a1") and app.selected == square("a1")
+    assert app.drag_pos == app.square_rect(*square("a3")).center
+    app.draw()  # the piece under the mouse, a faint copy on a1 and an outline on a3
+
+
+def test_dropping_on_an_illegal_square_puts_the_piece_back(app):
+    drag(app, "a1", "c3")
+    assert app.move_log == [] and app.dragging is None
+    assert app.selected == square("a1")  # still selected, so a click can finish the move
+    click(app, "a2")
+    assert app.gs.board[3][0] == "white_rook"
+
+
+def test_dropping_off_the_board_puts_the_piece_back(app):
+    start = app.square_rect(*square("a1")).center
+    app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=start))
+    app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(gui.WIDTH - 5, 5)))
+    assert app.move_log == [] and app.dragging is None
+
+
+def test_clicking_the_selected_piece_again_deselects_it(app):
+    click(app, "a1")
+    assert app.selected == square("a1")
+    click(app, "a1")
+    assert app.selected is None
+
+
+def test_cannot_drag_the_opponents_pieces(app):
+    drag(app, "a4", "a3")
+    assert app.dragging is None and app.move_log == []
+
+
+def test_dragging_a_pawn_to_the_last_rank_opens_the_picker(app):
+    load(app, position({"a5": "black_king", "d1": "white_king", "c4": "white_pawn"}))
+    drag(app, "c4", "c5")
+    assert [m.promotion_piece for m in app.promotion_choices] == ["rook", "bishop", "knight"]
+    click_at(app, app.promotion_options()[1][0].center)
+    assert app.gs.board[0][2] == "white_bishop"
+
+
+def test_drag_works_when_the_board_is_flipped(menu):
+    menu.human_is_white = False
+    menu.difficulty = "easy"
+    menu.start_game()
+    menu.update()
+    wait_for_ai(menu)
+    move = next(m for m in menu.valid_moves if not m.is_promotion)
+    drag(menu, gui.square_name(move.start_row, move.start_col), gui.square_name(move.end_row, move.end_col))
+    assert menu.move_log[-1] == move
+
+
+def test_restart_while_dragging_drops_the_piece(app):
+    drag(app, "a1", "a3", release=False)
+    press(app, pygame.K_r)
+    assert app.dragging is None
+
+
+def mate_in_one(app):
+    """White to move: c4-c5 promoting to a rook is checkmate"""
+    load(app, position({"a5": "black_king", "b3": "white_king", "c4": "white_pawn"}))
+
+
+def test_hint_shows_the_best_move(app):
+    mate_in_one(app)
+    press(app, pygame.K_h)
+    assert app.hint_thinking
+    app.draw()  # "Finding a hint..."
+    wait_for_ai(app)
+    assert not app.hint_thinking
+    assert app.hint in app.valid_moves
+    assert app.move_log == []  # a hint never plays the move for you
+    assert gui.move_notation(app.hint) == "c4-c5=R"
+    app.draw()  # the arrow
+
+
+def test_hint_button(app):
+    app.draw()
+    click_at(app, app.hint_button_rect().center)
+    wait_for_ai(app)
+    assert app.hint in app.valid_moves
+
+
+def test_playing_a_move_clears_the_hint(app):
+    press(app, pygame.K_h)
+    wait_for_ai(app)
+    assert app.hint is not None
+    click(app, "a1")
+    click(app, "a4")
+    assert app.hint is None
+
+
+def test_playing_before_the_hint_arrives_cancels_it(app):
+    press(app, pygame.K_h)
+    hint_thread = app.search_thread
+    drag(app, "a1", "a4")
+    hint_thread.join(timeout=10)
+    app.update()
+    assert app.hint is None and app.ai_thinking  # the AI is now working on its reply instead
+
+
+def test_no_hints_on_the_computers_turn_or_after_the_game(app):
+    click(app, "a1")
+    click(app, "a4")
+    app.update()  # the AI starts thinking
+    press(app, pygame.K_h)
+    assert not app.hint_thinking
+    load(app, position({"a5": "black_king", "d5": "white_rook", "b3": "white_king"}, white_to_move=False))
+    press(app, pygame.K_h)
+    assert not app.hint_thinking and app.hint is None
+
+
+def test_undo_clears_the_hint(menu):
+    menu.two_players = True
+    menu.start_game()
+    click(menu, "d2")
+    click(menu, "d3")
+    press(menu, pygame.K_h)  # a hint for Black
+    wait_for_ai(menu)
+    assert menu.hint is not None and menu.hint.piece_moved.startswith("black")
+    press(menu, pygame.K_u)
+    assert menu.hint is None

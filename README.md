@@ -44,7 +44,8 @@ The pieces move as in ordinary chess, with these differences:
 
 ## Features
 
-- A pygame interface: click a piece to see its legal moves, then click where it should go
+- A pygame interface: click or drag the pieces, with each piece's legal moves marked
+- Hints: press H (or the Hint button) and an arrow shows the best move the AI can find
 - Play against the computer as White or Black (the board turns around when you play Black), at
   Easy, Medium or Hard, or play a friend on the same computer
 - Highlights for the last move and for a king in check, plus a picker for pawn promotion
@@ -87,10 +88,11 @@ difficulty, then click **Start game** or press Enter.
 | Action | Control |
 | --- | --- |
 | Select a piece | Click it: dots mark the squares it can move to, rings mark captures |
-| Move | Click one of the marked squares |
+| Move | Click one of the marked squares, or drag the piece there |
 | Cancel a selection | Click anywhere else |
 | Castle | Move the king two squares (d1→b1 for White, a5→c5 for Black) |
 | Promote a pawn | Choose rook, bishop or knight in the picker |
+| Hint | **H** or the **Hint** button: an arrow shows the best move (searched at Hard strength) |
 | Undo | **U**: takes back your move and the computer's reply (one move in a 2-player game) |
 | Restart | **R** |
 | Back to the menu | **N** |
@@ -148,7 +150,7 @@ The GUI and sound tests use SDL's dummy video and audio drivers, so no window op
 ```
 Mirco-Chess/
 ├── main.py               # starts the pygame game
-├── gui.py                # pygame interface: menu, board, side panel, animations
+├── gui.py                # pygame interface: menu, board, side panel, drag-and-drop, hints
 ├── sounds.py             # move and capture sounds, generated in code
 ├── play_terminal.py      # the terminal version
 ├── chess_engine.py       # the rules: moves, castling, promotion, check, checkmate and draws

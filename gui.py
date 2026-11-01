@@ -1,4 +1,4 @@
-"""Micro Chess in a pygame window: click a piece, then click the square to move it to.
+"""Micro Chess in a pygame window: click a piece and then its new square, or drag it there.
 
 The AI thinks in a background thread, so the window keeps responding while it searches.
 """
@@ -48,6 +48,9 @@ DISABLED_TEXT = pygame.Color("#5d665b")
 LAST_MOVE = (246, 226, 90, 105)        # highlights are drawn see-through (the 4th number is alpha)
 SELECTED = (246, 226, 90, 170)
 MOVE_HINT = (25, 50, 25, 80)
+DROP_TARGET = (250, 250, 240)
+HINT_ARROW = (40, 110, 225, 170)
+GHOST_ALPHA = 90  # how faint a dragged piece's starting square looks
 CHECK = (225, 40, 30)
 DIM = (10, 14, 10, 150)
 
@@ -63,6 +66,8 @@ MENU_CHOICES = [
     ("Difficulty", "difficulty", [("Easy", "easy"), ("Medium", "medium"), ("Hard", "hard")]),
 ]
 MENU_WIDTH = 312
+
+HINT_DIFFICULTY = "hard"  # hints come from the strongest search
 
 # For the move list (c4-c5=R) and the material count next to the captured pieces
 PIECE_LETTERS = {"rook": "R", "bishop": "B", "knight": "N"}
@@ -160,7 +165,7 @@ class ChessGUI:
         self.human_is_white = True
         self.difficulty = "medium"
 
-        self.ai_results = queue.Queue()  # (search id, move) pairs from the AI thread
+        self.search_results = queue.Queue()  # (search id, "ai" or "hint", move) from search threads
         self.search_id = 0
         self.running = True
         self.in_menu = True
@@ -175,18 +180,23 @@ class ChessGUI:
 
     def open_menu(self):
         self.in_menu = True
-        self.cancel_ai()
+        self.dragging = None
+        self.cancel_search()
 
     def new_game(self):
         self.gs = GameState()
         self.move_log = []  # every move played, so U can take moves back
         self.move_texts = []  # the same moves as written in the move list, e.g. "d2-d3+"
         self.selected = None  # (row, col) of the piece the player picked up
+        self.dragging = None  # (row, col) of a piece being dragged with the mouse
+        self.drag_pos = (0, 0)  # where the mouse is while dragging
+        self.release_deselects = False  # the dragged piece was already selected before this click
         self.promotion_choices = None  # the moves to pick from while the promotion picker is open
         self.animation = None  # (move, start time in ms) while a move is sliding into place
+        self.hint = None  # the move suggested when the player asks for a hint
         # Show the board from Black's side when playing Black against the computer
         self.flipped = not self.two_players and not self.human_is_white
-        self.cancel_ai()
+        self.cancel_search()
         self.refresh()
 
     def refresh(self):
@@ -196,13 +206,16 @@ class ChessGUI:
         self.check = self.gs.in_check()
         self.last_move = self.move_log[-1] if self.move_log else None
 
-    def play(self, move):
+    def play(self, move, animate=True):
         self.gs.make_move(move)
-        self.animation = (move, pygame.time.get_ticks())
+        self.animation = (move, pygame.time.get_ticks()) if animate else None
         self.sounds.play("capture" if move.piece_captured != EMPTY else "move")
         self.move_log.append(move)
         self.selected = None
+        self.dragging = None
         self.promotion_choices = None
+        self.hint = None
+        self.cancel_search()  # a hint still being worked out is no use now
         self.refresh()
         suffix = "#" if self.result == "checkmate" else "+" if self.check else ""
         self.move_texts.append(move_notation(move) + suffix)
@@ -217,16 +230,28 @@ class ChessGUI:
             self.gs.undo_move(self.move_log.pop())
             self.move_texts.pop()
         self.animation = None
-        self.cancel_ai()
+        self.hint = None
+        self.cancel_search()
         self.selected = None
+        self.dragging = None
         self.promotion_choices = None
         self.refresh()
+
+    def choose_move(self, moves, animate=True):
+        """Play a move, or open the promotion picker if there's one move per promotion piece"""
+        if moves[0].is_promotion:
+            self.promotion_choices = moves
+        else:
+            self.play(moves[0], animate)
 
     def is_human_turn(self):
         return self.two_players or self.gs.white_to_move == self.human_is_white
 
     def moves_from(self, square):
         return [m for m in self.valid_moves if (m.start_row, m.start_col) == square]
+
+    def moves_between(self, start, end):
+        return [m for m in self.moves_from(start) if (m.end_row, m.end_col) == end]
 
     def move_list(self):
         """Rows for the move list: ("1.", White's move, Black's move or "")"""
@@ -250,25 +275,40 @@ class ChessGUI:
 
     # ---- AI ---------------------------------------------------------------
 
-    def start_ai(self):
-        """Search for the AI's move in a background thread so the window doesn't freeze.
+    def start_search(self, kind, difficulty):
+        """Search for a move in a background thread so the window doesn't freeze.
 
+        kind is "ai" for the computer's move or "hint" for a suggestion to the player.
         The search makes and undoes moves on the board while it works, so it gets its own copy.
         """
-        self.ai_thinking = True
+        if kind == "ai":
+            self.ai_thinking = True
+        else:
+            self.hint_thinking = True
         self.search_id += 1
-        search_id, position, difficulty = self.search_id, copy.deepcopy(self.gs), self.difficulty
+        search_id, position = self.search_id, copy.deepcopy(self.gs)
 
         def think():
-            self.ai_results.put((search_id, get_ai_move(position, difficulty)))
+            self.search_results.put((search_id, kind, get_ai_move(position, difficulty)))
 
-        self.ai_thread = threading.Thread(target=think, daemon=True)
-        self.ai_thread.start()
+        self.search_thread = threading.Thread(target=think, daemon=True)
+        self.search_thread.start()
 
-    def cancel_ai(self):
+    def cancel_search(self):
         """Forget any search still running (its answer is ignored when it arrives)"""
         self.search_id += 1
         self.ai_thinking = False
+        self.hint_thinking = False
+
+    def can_ask_for_hint(self):
+        return (not self.in_menu and self.result is None and self.is_human_turn()
+                and not self.ai_thinking and not self.hint_thinking and self.hint is None
+                and not self.promotion_choices)
+
+    def ask_for_hint(self):
+        """Have the AI find the best move for the player; it's shown as an arrow"""
+        if self.can_ask_for_hint():
+            self.start_search("hint", HINT_DIFFICULTY)
 
     def sliding_pieces(self):
         """The pieces still sliding to their new squares and how far along they are (0 to 1).
@@ -295,14 +335,20 @@ class ChessGUI:
         if self.animation and not self.sliding_pieces()[0]:
             self.animation = None
         # Wait for the last move to finish sliding before showing the AI's reply
-        while self.animation is None and not self.ai_results.empty():
-            search_id, ai_move = self.ai_results.get()
-            if search_id == self.search_id:
+        while self.animation is None and not self.search_results.empty():
+            search_id, kind, found = self.search_results.get()
+            if search_id != self.search_id:
+                continue  # from a search that was cancelled
+            # The search used a copy of the game: find the same move in the real one
+            move = next(m for m in self.valid_moves if m == found)
+            if kind == "hint":
+                self.hint_thinking = False
+                self.hint = move
+            else:
                 self.ai_thinking = False
-                # The AI searched a copy of the game: play the same move on the real one
-                self.play(next(m for m in self.valid_moves if m == ai_move))
+                self.play(move)
         if not self.in_menu and self.result is None and not self.is_human_turn() and not self.ai_thinking:
-            self.start_ai()
+            self.start_search("ai", self.difficulty)
 
     # ---- input ------------------------------------------------------------
 
@@ -323,11 +369,17 @@ class ChessGUI:
                 self.undo()
             elif event.key == pygame.K_n:
                 self.open_menu()
+            elif event.key == pygame.K_h:
+                self.ask_for_hint()
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             if self.in_menu:
                 self.handle_menu_click(event.pos)
             else:
                 self.handle_click(event.pos)
+        elif event.type == pygame.MOUSEMOTION and self.dragging:
+            self.drag_pos = event.pos
+        elif event.type == pygame.MOUSEBUTTONUP and event.button == 1 and self.dragging:
+            self.drop(event.pos)
 
     def handle_menu_click(self, pos):
         for rect, setting, value, _ in self.menu_buttons():
@@ -354,6 +406,10 @@ class ChessGUI:
             self.selected = None
             return
 
+        if self.hint_button_rect().collidepoint(pos):
+            self.ask_for_hint()
+            return
+
         if not self.is_human_turn() or self.ai_thinking:
             return
 
@@ -363,20 +419,35 @@ class ChessGUI:
             return
 
         if self.selected is not None:
-            moves = [m for m in self.moves_from(self.selected) if (m.end_row, m.end_col) == square]
+            moves = self.moves_between(self.selected, square)
             if moves:
-                if moves[0].is_promotion:
-                    self.promotion_choices = moves  # one move per piece; the picker chooses
-                else:
-                    self.play(moves[0])
+                self.choose_move(moves)
                 return
 
         piece = self.gs.board[square[0]][square[1]]
         own_color = "white" if self.gs.white_to_move else "black"
-        if piece.startswith(own_color) and square != self.selected:
-            self.selected = square
+        if piece.startswith(own_color):
+            # Pick the piece up: it follows the mouse until the button is released
+            self.release_deselects = square == self.selected
+            self.selected = self.dragging = square
+            self.drag_pos = pos
         else:
             self.selected = None
+
+    def drop(self, pos):
+        """The mouse button was released while dragging a piece"""
+        start, self.dragging = self.dragging, None
+        square = self.square_at(pos)
+        if square == start:
+            # Released where it was picked up, so it was a click: clicking the
+            # selected piece again puts it down, otherwise it stays selected
+            if self.release_deselects:
+                self.selected = None
+            return
+        moves = self.moves_between(start, square)
+        if moves:
+            self.choose_move(moves, animate=False)  # the piece is already where it was dropped
+        # Dropped anywhere else, the piece goes back and stays selected
 
     # ---- board geometry ---------------------------------------------------
 
@@ -404,6 +475,10 @@ class ChessGUI:
         top = board.centery - SQUARE_SIZE // 2 + 12
         return [(pygame.Rect(left + i * SQUARE_SIZE, top, SQUARE_SIZE, SQUARE_SIZE), move)
                 for i, move in enumerate(self.promotion_choices)]
+
+    def hint_button_rect(self):
+        """The Hint button, top right of the side panel"""
+        return pygame.Rect(SIDE_PANEL_X + SIDE_PANEL_WIDTH - 14 - 64, BOARD_Y + 9, 64, 26)
 
     def play_again_rect(self):
         rect = pygame.Rect(0, 0, 124, 44)
@@ -454,6 +529,8 @@ class ChessGUI:
         self.draw_coordinates()
         self.draw_side_panel()
         self.draw_status()
+        if self.dragging:
+            self.draw_dragged_piece()
         if self.promotion_choices:
             self.draw_promotion_picker()
         if self.result is not None:
@@ -517,6 +594,9 @@ class ChessGUI:
                 piece = self.animation[0].piece_captured if (r, c) in arriving else self.gs.board[r][c]
                 if piece != EMPTY:
                     image = self.images[piece]
+                    if (r, c) == self.dragging:  # only a faint copy stays behind
+                        image = image.copy()
+                        image.set_alpha(GHOST_ALPHA)
                     self.screen.blit(image, image.get_rect(center=self.square_rect(r, c).center))
         for piece, from_square, to_square in sliding:
             (x1, y1), (x2, y2) = self.square_rect(*from_square).center, self.square_rect(*to_square).center
@@ -524,10 +604,38 @@ class ChessGUI:
             image = self.images[piece]
             self.screen.blit(image, image.get_rect(center=center))
 
+        if self.hint:
+            self.draw_hint_arrow()
+
         if self.selected:
             for move in self.moves_from(self.selected):
                 hint = self.move_dot if move.piece_captured == EMPTY else self.capture_ring
                 self.screen.blit(hint, self.square_rect(move.end_row, move.end_col))
+
+        if self.dragging:
+            target = self.square_at(self.drag_pos)
+            if target and self.moves_between(self.dragging, target):
+                pygame.draw.rect(self.screen, DROP_TARGET, self.square_rect(*target), 4)
+
+    def draw_hint_arrow(self):
+        """A see-through arrow from the hinted piece to the square it should move to"""
+        board = self.board_rect()
+        layer = pygame.Surface(board.size, pygame.SRCALPHA)
+        corner = pygame.Vector2(board.topleft)
+        start = pygame.Vector2(self.square_rect(self.hint.start_row, self.hint.start_col).center) - corner
+        end = pygame.Vector2(self.square_rect(self.hint.end_row, self.hint.end_col).center) - corner
+        direction = (end - start).normalize()
+        across = pygame.Vector2(-direction.y, direction.x)
+        tip = end - direction * 10
+        head_base = tip - direction * 28
+        pygame.draw.line(layer, HINT_ARROW, start, head_base, 12)
+        pygame.draw.polygon(layer, HINT_ARROW, [tip, head_base + across * 20, head_base - across * 20])
+        self.screen.blit(layer, board)
+
+    def draw_dragged_piece(self):
+        """The piece being dragged, under the mouse and on top of everything else"""
+        image = self.images[self.gs.board[self.dragging[0]][self.dragging[1]]]
+        self.screen.blit(image, image.get_rect(center=self.drag_pos))
 
     def draw_coordinates(self):
         for r in range(ROWS):
@@ -544,6 +652,16 @@ class ChessGUI:
         pygame.draw.rect(self.screen, SIDE_PANEL, area, border_radius=12)
         left = area.x + 14
         self.screen.blit(self.small_font.render("MOVES", True, MUTED_TEXT), (left, area.y + 14))
+
+        button = self.hint_button_rect()
+        if self.can_ask_for_hint():
+            hover = button.collidepoint(pygame.mouse.get_pos())
+            fill, text_color = (BUTTON_HOVER if hover else BUTTON), TEXT
+        else:
+            fill, text_color = CHOICE, DISABLED_TEXT
+        pygame.draw.rect(self.screen, fill, button, border_radius=8)
+        label = self.small_font.render("Hint", True, text_color)
+        self.screen.blit(label, label.get_rect(center=button.center))
 
         # Captured pieces at the bottom, one row per side, with the material count for the side ahead
         captured_top = area.bottom - 106
@@ -581,16 +699,20 @@ class ChessGUI:
             text, color = result_line(self.result, self.gs.white_to_move), TEXT
         elif self.ai_thinking:
             text, color = "Thinking...", MUTED_TEXT
+        elif self.hint_thinking:
+            text, color = "Finding a hint...", MUTED_TEXT
         else:
             side = "White" if self.gs.white_to_move else "Black"
             text, color = f"{side} to move", TEXT
             if self.check:
                 text, color = f"{text} - Check!", CHECK_TEXT
+            if self.hint:
+                text += f" - hint: {move_notation(self.hint)}"
         label = self.font.render(text, True, color)
         self.screen.blit(label, label.get_rect(midleft=(16, bar.centery)))
 
         sound = "unmute" if self.sounds.muted else "mute"
-        keys = self.small_font.render(f"R restart  U undo  N menu  M {sound}", True, MUTED_TEXT)
+        keys = self.small_font.render(f"H hint  R restart  U undo  N menu  M {sound}", True, MUTED_TEXT)
         if label.get_width() + keys.get_width() + 48 <= WIDTH:
             self.screen.blit(keys, keys.get_rect(midright=(WIDTH - 16, bar.centery)))
 
