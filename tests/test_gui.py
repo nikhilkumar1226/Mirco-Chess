@@ -376,10 +376,13 @@ def test_move_list_pairs_moves_by_number(menu):
     for start, end in [("d2", "d3"), ("b5", "c3"), ("d1", "c2")]:  # the knight checks, the king steps away
         click(menu, start)
         click(menu, end)
-    assert menu.move_list() == [("1.", "d2-d3", "b5-c3+"), ("2.", "d1-c2", "")]
+    assert menu.move_texts == ["d2-d3", "b5-c3+", "d1-c2"]
+    # White's and Black's moves side by side, one numbered row per pair
+    cells = dict((index, rect) for rect, index in menu.move_cells())
+    assert cells[0].y == cells[1].y < cells[2].y and cells[0].x == cells[2].x < cells[1].x
     menu.draw()
     press(menu, pygame.K_u)
-    assert menu.move_list() == [("1.", "d2-d3", "b5-c3+")]
+    assert menu.move_texts == ["d2-d3", "b5-c3+"]
 
 
 def test_checkmate_is_marked_in_the_move_list(app):
@@ -387,7 +390,7 @@ def test_checkmate_is_marked_in_the_move_list(app):
     click(app, "c4")
     click(app, "c5")
     click_at(app, app.promotion_options()[0][0].center)
-    assert app.move_list() == [("1.", "c4-c5=R#", "")]
+    assert app.move_texts == ["c4-c5=R#"]
 
 
 def test_captured_pieces_and_material(menu):
@@ -688,6 +691,95 @@ def test_score_text():
     assert gui.score_text(gui.MATE_SCORE - 2) == "+M1"
     assert gui.score_text(-(gui.MATE_SCORE - 4)) == "-M2"
     assert gui.score_text(-(gui.MATE_SCORE - 1)) == "0-1"  # Black has mated
+
+
+def mate_with_a_promotion(app):
+    """Play c4-c5=R, checkmate, from the mate_in_one position"""
+    mate_in_one(app)
+    click(app, "c4")
+    click(app, "c5")
+    click_at(app, app.promotion_options()[0][0].center)
+    assert app.result == "checkmate"
+
+
+def finish_review(app):
+    """Let review judge every move (it does one per frame)"""
+    for _ in app.move_log:
+        app.update()
+
+
+def test_review_steps_through_a_finished_game(app):
+    mate_with_a_promotion(app)
+    app.draw()
+    click_at(app, app.review_button_rect().center)
+    assert app.review_index == 1
+    finish_review(app)
+    assert app.review_marks == [("", None)]  # mating is never a mistake
+    app.draw()
+    press(app, pygame.K_LEFT)
+    assert app.review_index == 0
+    assert app.board_view()[0].board[1][2] == "white_pawn"  # the pawn is back on c4
+    assert app.board_view()[1] is None
+    app.draw()
+    press(app, pygame.K_LEFT)  # can't go back past the start
+    assert app.review_index == 0
+    press(app, pygame.K_END)
+    assert app.review_index == 1 and app.board_view()[0].board[0][2] == "white_rook"
+    press(app, pygame.K_ESCAPE)  # back to the game-over panel, the game is still there
+    assert app.review_index is None and app.running and app.result == "checkmate"
+
+
+def test_review_buttons_and_clicking_moves(menu):
+    menu.two_players = True
+    menu.start_game()
+    for start, end in [("d2", "d3"), ("b5", "c3"), ("d1", "c2")]:
+        click(menu, start)
+        click(menu, end)
+    menu.result = "repetition"  # pretend the game is over here
+    menu.start_review()
+    assert menu.review_index == 3
+    for action, expected in [("first", 0), ("forward", 1), ("last", 3), ("back", 2)]:
+        click_at(menu, next(rect for rect, name in menu.review_buttons() if name == action).center)
+        assert menu.review_index == expected
+    first_move = next(rect for rect, index in menu.move_cells() if index == 0)
+    click_at(menu, first_move.center)
+    assert menu.review_index == 1
+    menu.draw()
+    click_at(menu, next(rect for rect, name in menu.review_buttons() if name == "done").center)
+    assert menu.review_index is None
+
+
+def test_review_marks_a_blunder_and_shows_a_better_move(menu):
+    menu.two_players = True
+    menu.start_game()
+    click(menu, "a1")
+    click(menu, "a4")  # Ra1xa4+?? loses the rook to the king
+    click(menu, "a5")
+    click(menu, "a4")
+    mark, better = menu.judge_move(0)
+    assert mark == "??" and better in menu.position_after(0).get_valid_moves()
+    assert menu.judge_move(1) == ("", None)  # taking the rook was right
+    menu.result = "repetition"
+    menu.start_review(1)
+    finish_review(menu)
+    assert menu.better_move() == better
+    menu.draw()
+
+
+def test_review_switched_off(app):
+    app.toggle_setting("review")
+    mate_with_a_promotion(app)
+    assert [label for _, label, _ in app.game_over_buttons()] == ["Play again", "Menu"]
+    press(app, pygame.K_LEFT)
+    assert app.review_index is None
+    app.draw()
+
+
+def test_undo_after_the_game_ends_stops_the_review(app):
+    mate_with_a_promotion(app)
+    app.start_review()
+    press(app, pygame.K_u)
+    assert app.review_index is None and app.review_marks == [] and app.result is None
 
 
 def test_drag_a_piece_to_move_it(app, monkeypatch):

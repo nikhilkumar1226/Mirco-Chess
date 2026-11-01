@@ -102,6 +102,7 @@ Donut                              Pillars
   choices on the start menu are remembered between launches
 - An optional chess clock (off unless you choose one)
 - An optional evaluation bar showing who is ahead, by the computer's reckoning
+- Game review: step through a finished game, with mistakes marked and a better move shown for each
 - Undo, restart, and a game-over screen with **Play again**
 - The computer thinks in a background thread, so the window never freezes
 - A terminal version that needs nothing but Python, with all four boards
@@ -149,6 +150,8 @@ and the difficulty, then click **Start game** or press Enter.
 | Back to the menu | **N** |
 | Settings | **S**, the cog button above the move list, or **Settings** on the start menu |
 | Sound on/off | **M** (or in Settings) |
+| Review a finished game | **Review** on the game-over panel, **←**, or click a move in the list |
+| Step through the review | **←** **→**, **Home** / **End**, or the buttons in the status bar; **Esc** to finish |
 | Quit | **Esc** (once a game has started, it asks first: **Enter** quits, **Esc** keeps playing) |
 
 The settings are saved in a small file, `.micro_chess.json`, in your home folder. Delete it to go
@@ -164,6 +167,12 @@ different clock during a game starts both clocks again.
 part grows from White's side of the board as White gets ahead. The number under it is the lead in
 pawns (+1.2 means White is ahead by about a pawn, -0.5 Black by half a pawn), or +M2 / -M2 for a
 forced mate in 2 moves. It comes from a 4-move-deep search after every move, the same as Medium.
+
+**Game review:** when a game ends, click **Review** to step through it. The computer checks every
+move with a short search, comparing the best score it can find before the move with the score
+after it. A move that gave away 1.5 pawns or more is marked **?**, and 3 pawns or more **??**.
+For a marked move, a green arrow shows the move that would have been better. You can switch review
+off in Settings.
 
 In the terminal version, type a move as two squares, such as `d2 d3`. To castle, type the king's
 move (`d1 b1` or `a5 c5`). Type `quit` to leave.
@@ -221,7 +230,7 @@ The GUI and sound tests use SDL's dummy video and audio drivers, so no window op
 ```
 Mirco-Chess/
 ├── main.py               # starts the pygame game
-├── gui.py                # pygame interface: menu, board, side panel, drag-and-drop, hints
+├── gui.py                # pygame interface: menu, settings, board, side panel, clock, review
 ├── sounds.py             # move and capture sounds, generated in code
 ├── settings.py           # loads and saves the settings
 ├── play_terminal.py      # the terminal version

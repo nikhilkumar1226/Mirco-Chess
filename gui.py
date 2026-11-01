@@ -84,9 +84,10 @@ SETTING_SWITCHES = [
     ("Board coordinates", "coordinates"),
     ("Ask before quitting a game", "confirm_quit"),
     ("Evaluation bar", "eval_bar"),
+    ("Game review", "review"),
     ("Chess clock (min)", "clock"),  # a row of choices instead of a switch
 ]
-SETTINGS_ROW_HEIGHT = 40
+SETTINGS_ROW_HEIGHT = 37
 CLOCK_CHOICES = [("Off", 0), ("1", 1), ("3", 3), ("5", 5), ("10", 10)]  # minutes for each player
 
 HINT_DIFFICULTY = "hard"  # hints come from the strongest search
@@ -95,6 +96,9 @@ HINT_DIFFICULTY = "hard"  # hints come from the strongest search
 PIECE_LETTERS = {"rook": "R", "bishop": "B", "knight": "N"}
 MATERIAL = {"pawn": 1, "knight": 3, "bishop": 3, "rook": 5, "king": 0}
 CAPTURE_ORDER = ["rook", "bishop", "knight", "pawn"]
+
+REVIEW_KEYS = {pygame.K_LEFT: "back", pygame.K_RIGHT: "forward", pygame.K_HOME: "first", pygame.K_UP: "first",
+               pygame.K_END: "last", pygame.K_DOWN: "last"}
 
 DRAW_TEXT = {
     "stalemate": ("Stalemate", "It's a draw"),
@@ -105,6 +109,12 @@ DRAW_TEXT = {
 LOW_TIME_MS = 10_000  # a clock turns red when it gets this low
 EVAL_BAR_DEPTH = 4  # how deep the search for the evaluation bar looks (as deep as Medium)
 EVAL_BAR = pygame.Rect(BOARD_X + BOARD_AREA_WIDTH + 5, BOARD_Y, 10, BOARD_AREA_HEIGHT)  # between board and panel
+REVIEW_DEPTH = 4  # how deep game review searches to judge each move
+MISTAKE, BLUNDER = 150, 300  # a move that gives away this many centipawns is marked "?" or "??"
+MARK_COLORS = {"?": pygame.Color("#f0b25a"), "??": CHECK_TEXT}
+BETTER_ARROW = (60, 175, 85, 170)  # in review, the move that would have been better
+MOVE_LINE_HEIGHT = 26  # the move list's rows
+REVIEW_LABELS = {"first": "|<", "back": "<", "forward": ">", "last": ">|", "done": "Done"}
 
 
 def load_piece_images(size):
@@ -285,6 +295,8 @@ class ChessGUI:
         self.sounds.muted = not self.settings["sound"]
         if name == "eval_bar":
             self.update_eval()
+        if name == "review" and self.review_index is not None:
+            self.stop_review()
         if name == "hints" and (self.hint or self.hint_thinking):
             self.hint = None
             self.cancel_search()  # forget the hint being worked out (the AI restarts if it was thinking)
@@ -293,6 +305,7 @@ class ChessGUI:
     def open_menu(self):
         self.in_menu = True
         self.dragging = None
+        self.review_index = None
         self.cancel_search()
 
     def new_game(self):
@@ -307,6 +320,9 @@ class ChessGUI:
         self.promotion_choices = None  # the moves to pick from while the promotion picker is open
         self.animation = None  # (move, start time in ms) while a move is sliding into place
         self.hint = None  # the move suggested when the player asks for a hint
+        self.review_index = None  # while reviewing a finished game: how many of its moves are shown
+        self.review_state = None  # the position being reviewed
+        self.review_marks = []  # (mark, better move) for each move, worked out during review
         self.reset_clock()
         # Show the board from Black's side when playing Black against the computer
         self.flipped = not self.two_players and not self.human_is_white
@@ -343,7 +359,10 @@ class ChessGUI:
 
     def update_eval(self):
         """The score for the evaluation bar (None while the bar is switched off)"""
-        self.eval_score = position_score(self.gs, EVAL_BAR_DEPTH) if self.settings["eval_bar"] else None
+        if self.settings["eval_bar"]:
+            self.eval_score = position_score(self.board_view()[0], EVAL_BAR_DEPTH)
+        else:
+            self.eval_score = None
 
     def play(self, move, animate=True):
         self.gs.make_move(move)
@@ -369,6 +388,8 @@ class ChessGUI:
         for _ in range(count):
             self.gs.undo_move(self.move_log.pop())
             self.move_texts.pop()
+        self.review_index = None
+        self.review_marks = []
         self.animation = None
         self.hint = None
         self.cancel_search()
@@ -393,17 +414,10 @@ class ChessGUI:
     def moves_between(self, start, end):
         return [m for m in self.moves_from(start) if (m.end_row, m.end_col) == end]
 
-    def move_list(self):
-        """Rows for the move list: ("1.", White's move, Black's move or "")"""
-        rows = []
-        for i in range(0, len(self.move_texts), 2):
-            black = self.move_texts[i + 1] if i + 1 < len(self.move_texts) else ""
-            rows.append((f"{i // 2 + 1}.", self.move_texts[i], black))
-        return rows
-
     def captured_pieces(self):
         """(pieces White has captured, pieces Black has captured), most valuable first"""
-        captured = sorted((m.piece_captured for m in self.move_log if m.piece_captured != EMPTY),
+        moves = self.move_log if self.review_index is None else self.move_log[:self.review_index]
+        captured = sorted((m.piece_captured for m in moves if m.piece_captured != EMPTY),
                           key=lambda piece: CAPTURE_ORDER.index(piece.split("_")[1]))
         return ([p for p in captured if p.startswith("black")],
                 [p for p in captured if p.startswith("white")])
@@ -411,7 +425,67 @@ class ChessGUI:
     def material_balance(self):
         """White's material minus Black's (pawn = 1, knight and bishop = 3, rook = 5)"""
         return sum(MATERIAL[piece.split("_")[1]] * (1 if piece.startswith("white") else -1)
-                   for row in self.gs.board for piece in row if piece not in (EMPTY, HOLE))
+                   for row in self.board_view()[0].board for piece in row if piece not in (EMPTY, HOLE))
+
+    # ---- game review ------------------------------------------------------
+
+    def can_review(self):
+        return self.settings["review"] and self.result is not None and bool(self.move_log)
+
+    def start_review(self, index=None):
+        """Step through the finished game, starting after `index` moves (the last one if not given)"""
+        if self.can_review():
+            self.show_review_position(len(self.move_log) if index is None else index)
+
+    def show_review_position(self, index):
+        self.review_index = max(0, min(len(self.move_log), index))
+        self.review_state = self.position_after(self.review_index)
+        self.update_eval()
+
+    def stop_review(self):
+        self.review_index = None
+        self.update_eval()
+
+    def board_view(self):
+        """(game, last move) to draw: the game itself, or the position being reviewed"""
+        if self.review_index is None:
+            return self.gs, self.last_move
+        return self.review_state, self.move_log[self.review_index - 1] if self.review_index else None
+
+    def position_after(self, count):
+        """A copy of the game as it stood after its first `count` moves"""
+        gs = copy.deepcopy(self.gs)
+        for move in reversed(self.move_log[count:]):
+            gs.undo_move(move)
+        return gs
+
+    def judge_move(self, i):
+        """How the i-th move (from 0) did: ("??", better move) if it threw away a lot,
+        ("?", better move) if it threw away a fair amount, otherwise ("", None).
+
+        A search scores the position before the move (with the best reply to everything)
+        and after it; the difference is what the move gave away.
+        """
+        gs = self.position_after(i)
+        white = gs.white_to_move
+        best = position_score(gs, REVIEW_DEPTH)
+        gs.make_move(self.move_log[i])
+        played = position_score(gs, REVIEW_DEPTH - 1)
+        gs.undo_move(self.move_log[i])
+        lost = best - played if white else played - best
+        if lost < MISTAKE:
+            return "", None
+        better = get_ai_move(gs, depth=REVIEW_DEPTH, rng=random.Random(0))
+        return ("??" if lost >= BLUNDER else "?"), better
+
+    def review_step(self, action):
+        """Move through the review: "first", "back", "forward" or "last" (or "done" to stop)"""
+        if action == "done":
+            self.stop_review()
+            return
+        targets = {"first": 0, "back": self.review_index - 1, "forward": self.review_index + 1,
+                   "last": len(self.move_log)}
+        self.show_review_position(targets[action])
 
     # ---- AI ---------------------------------------------------------------
 
@@ -496,6 +570,9 @@ class ChessGUI:
                 self.play(move or random.choice(self.valid_moves))
         if not self.in_menu and self.result is None and not self.is_human_turn() and not self.ai_thinking:
             self.start_search("ai", self.difficulty)
+        # Game review judges one move per frame, so the window keeps responding
+        if self.review_index is not None and len(self.review_marks) < len(self.move_log):
+            self.review_marks.append(self.judge_move(len(self.review_marks)))
 
     # ---- input ------------------------------------------------------------
 
@@ -507,8 +584,12 @@ class ChessGUI:
         elif self.in_settings:
             self.handle_settings_event(event)
         elif event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_ESCAPE:
+            if event.key == pygame.K_ESCAPE and self.review_index is not None:
+                self.stop_review()
+            elif event.key == pygame.K_ESCAPE:
                 self.ask_to_quit()
+            elif event.key in REVIEW_KEYS and not self.in_menu:
+                self.review_key(event.key)
             elif event.key == pygame.K_m:
                 self.toggle_setting("sound")
             elif event.key == pygame.K_s:
@@ -533,6 +614,13 @@ class ChessGUI:
             self.drag_pos = event.pos
         elif event.type == pygame.MOUSEBUTTONUP and event.button == 1 and self.dragging:
             self.drop(event.pos)
+
+    def review_key(self, key):
+        """The arrow keys, Home and End step through a finished game (Left also starts the review)"""
+        if self.review_index is not None:
+            self.review_step(REVIEW_KEYS[key])
+        elif key == pygame.K_LEFT:
+            self.start_review(len(self.move_log) - 1)
 
     def ask_to_quit(self):
         """Esc: quit at once if there's no game to lose (or the player said not to ask), otherwise ask first"""
@@ -585,11 +673,23 @@ class ChessGUI:
             self.open_settings()
             return
 
+        if self.review_index is not None:
+            for rect, action in self.review_buttons():
+                if rect.collidepoint(pos):
+                    self.review_step(action)
+            for rect, index in self.move_cells():  # clicking a move in the list shows the position after it
+                if rect.collidepoint(pos):
+                    self.show_review_position(index + 1)
+            return
+
         if self.result is not None:
-            if self.play_again_rect().collidepoint(pos):
-                self.new_game()
-            elif self.menu_button_rect().collidepoint(pos):
-                self.open_menu()
+            for rect, _, action in self.game_over_buttons():
+                if rect.collidepoint(pos):
+                    {"again": self.new_game, "review": self.start_review, "menu": self.open_menu}[action]()
+                    return
+            for rect, index in self.move_cells():
+                if rect.collidepoint(pos):
+                    self.start_review(index + 1)
             return
 
         if self.promotion_choices:
@@ -682,15 +782,60 @@ class ChessGUI:
         """The Hint button, left of the settings button"""
         return pygame.Rect(self.gear_button_rect().x - 8 - 64, BOARD_Y + 9, 64, 26)
 
+    def game_over_buttons(self):
+        """(rect, label, action) for the buttons on the game-over panel"""
+        if self.can_review():
+            buttons, gap = [("Play again", "again", 112), ("Review", "review", 86), ("Menu", "menu", 72)], 8
+        else:
+            buttons, gap = [("Play again", "again", 124), ("Menu", "menu", 124)], 12
+        x = self.board_rect().centerx - (sum(width for _, _, width in buttons) + gap * (len(buttons) - 1)) // 2
+        rects = []
+        for label, action, width in buttons:
+            rect = pygame.Rect(x, 0, width, 44)
+            rect.centery = self.board_rect().centery + 40
+            rects.append((rect, label, action))
+            x += width + gap
+        return rects
+
     def play_again_rect(self):
-        rect = pygame.Rect(0, 0, 124, 44)
-        rect.midright = (self.board_rect().centerx - 6, self.board_rect().centery + 40)
-        return rect
+        return next(rect for rect, _, action in self.game_over_buttons() if action == "again")
 
     def menu_button_rect(self):
-        rect = pygame.Rect(0, 0, 124, 44)
-        rect.midleft = (self.board_rect().centerx + 6, self.board_rect().centery + 40)
-        return rect
+        return next(rect for rect, _, action in self.game_over_buttons() if action == "menu")
+
+    def review_button_rect(self):
+        return next(rect for rect, _, action in self.game_over_buttons() if action == "review")
+
+    def review_buttons(self):
+        """(rect, action) for the buttons in the status bar while reviewing a game"""
+        widths = {"first": 30, "back": 30, "forward": 30, "last": 30, "done": 56}
+        x = WIDTH - 16 - sum(widths.values()) - 6 * (len(widths) - 1)
+        buttons = []
+        for action, width in widths.items():
+            buttons.append((pygame.Rect(x, HEIGHT - STATUS_HEIGHT + 9, width, 30), action))
+            x += width + 6
+        return buttons
+
+    def move_list_top(self):
+        return BOARD_Y + 40 + (46 if self.clock_ms is not None else 0)  # the clocks go above the list
+
+    def move_cells(self):
+        """(rect, move index) for each move shown in the move list. Once the list is full the
+        oldest moves scroll off the top, except that the move being reviewed stays in view."""
+        top = self.move_list_top()
+        shown = (BOARD_Y + BOARD_AREA_HEIGHT - 106 - 8 - top) // MOVE_LINE_HEIGHT
+        rows = (len(self.move_texts) + 1) // 2
+        first = max(0, rows - shown)
+        if self.review_index:
+            first = min(first, (self.review_index - 1) // 2)
+        cells = []
+        for row in range(first, min(rows, first + shown)):
+            y = top + (row - first) * MOVE_LINE_HEIGHT
+            for side in (0, 1):
+                if 2 * row + side < len(self.move_texts):
+                    rect = pygame.Rect(SIDE_PANEL_X + 14 + 20 + side * 74, y - 4, 72, MOVE_LINE_HEIGHT - 2)
+                    cells.append((rect, 2 * row + side))
+        return cells
 
     def keep_playing_rect(self):
         """The buttons of the "Quit the game?" dialog: Keep playing (140 wide) and Quit (100 wide)"""
@@ -742,7 +887,7 @@ class ChessGUI:
     def settings_rows(self):
         """(rect, setting) for each switch on the settings screen; clicking anywhere on the row flips it"""
         left = (WIDTH - MENU_WIDTH) // 2
-        return [(pygame.Rect(left, 92 + i * SETTINGS_ROW_HEIGHT, MENU_WIDTH, SETTINGS_ROW_HEIGHT - 6), name)
+        return [(pygame.Rect(left, 84 + i * SETTINGS_ROW_HEIGHT, MENU_WIDTH, SETTINGS_ROW_HEIGHT - 6), name)
                 for i, (_, name) in enumerate(SETTING_SWITCHES)]
 
     def clock_choice_rects(self):
@@ -779,7 +924,7 @@ class ChessGUI:
             self.draw_dragged_piece()
         if self.promotion_choices:
             self.draw_promotion_picker()
-        if self.result is not None:
+        if self.result is not None and self.review_index is None:
             self.draw_game_over()
         if self.confirming_quit:
             self.draw_quit_dialog()
@@ -879,11 +1024,12 @@ class ChessGUI:
                     self.screen.fill(color, (left + c * ICON_SQUARE, top + r * ICON_SQUARE, ICON_SQUARE, ICON_SQUARE))
 
     def draw_board(self):
-        rows, cols = self.gs.rows, self.gs.cols
+        gs, last_move = self.board_view()
+        rows, cols = gs.rows, gs.cols
         for r in range(rows):
             for c in range(cols):
                 rect = self.square_rect(r, c)
-                if self.gs.board[r][c] == HOLE:  # a hole looks cut out of the board
+                if gs.board[r][c] == HOLE:  # a hole looks cut out of the board
                     self.screen.fill(HOLE_COLOR, rect)
                     pygame.draw.rect(self.screen, HOLE_EDGE, rect.inflate(-6, -6), 3, border_radius=4)
                     continue
@@ -891,14 +1037,13 @@ class ChessGUI:
                 color = DARK_SQUARE if (r + c) % 2 == (rows - 1) % 2 else LIGHT_SQUARE
                 self.screen.fill(color, rect)
 
-        if self.last_move:
-            for r, c in ((self.last_move.start_row, self.last_move.start_col),
-                         (self.last_move.end_row, self.last_move.end_col)):
+        if last_move:
+            for r, c in ((last_move.start_row, last_move.start_col), (last_move.end_row, last_move.end_col)):
                 self.screen.blit(self.last_move_overlay, self.square_rect(r, c))
         if self.selected:
             self.screen.blit(self.selected_overlay, self.square_rect(*self.selected))
-        if self.check:
-            king = self.gs.white_king_location if self.gs.white_to_move else self.gs.black_king_location
+        if self.check if self.review_index is None else gs.in_check():
+            king = gs.white_king_location if gs.white_to_move else gs.black_king_location
             self.screen.blit(self.check_overlay, self.square_rect(*king))
 
         # A moving piece is drawn on its way, not on its new square; anything it
@@ -907,7 +1052,7 @@ class ChessGUI:
         arriving = {to_square for _, _, to_square in sliding}
         for r in range(rows):
             for c in range(cols):
-                piece = self.animation[0].piece_captured if (r, c) in arriving else self.gs.board[r][c]
+                piece = self.animation[0].piece_captured if (r, c) in arriving else gs.board[r][c]
                 if piece not in (EMPTY, HOLE):
                     image = self.images[piece]
                     if (r, c) == self.dragging:  # only a faint copy stays behind
@@ -921,7 +1066,10 @@ class ChessGUI:
             self.screen.blit(image, image.get_rect(center=center))
 
         if self.hint:
-            self.draw_hint_arrow()
+            self.draw_arrow(self.hint, HINT_ARROW)
+        better = self.better_move()
+        if better:
+            self.draw_arrow(better, BETTER_ARROW)
 
         if self.selected and self.settings["show_moves"]:
             for move in self.moves_from(self.selected):
@@ -933,19 +1081,26 @@ class ChessGUI:
             if target and self.moves_between(self.dragging, target):
                 pygame.draw.rect(self.screen, DROP_TARGET, self.square_rect(*target), 4)
 
-    def draw_hint_arrow(self):
-        """A see-through arrow from the hinted piece to the square it should move to"""
+    def better_move(self):
+        """While reviewing a move that was marked as a mistake, the move that would have been better"""
+        if self.review_index and self.review_index <= len(self.review_marks):
+            return self.review_marks[self.review_index - 1][1]
+        return None
+
+    def draw_arrow(self, move, color):
+        """A see-through arrow from a move's starting square to its end square"""
         board = self.board_rect()
         layer = pygame.Surface(board.size, pygame.SRCALPHA)
         corner = pygame.Vector2(board.topleft)
-        start = pygame.Vector2(self.square_rect(self.hint.start_row, self.hint.start_col).center) - corner
-        end = pygame.Vector2(self.square_rect(self.hint.end_row, self.hint.end_col).center) - corner
+        start = pygame.Vector2(self.square_rect(move.start_row, move.start_col).center) - corner
+        end = pygame.Vector2(self.square_rect(move.end_row, move.end_col).center) - corner
         direction = (end - start).normalize()
         across = pygame.Vector2(-direction.y, direction.x)
-        tip = end - direction * 10
-        head_base = tip - direction * 28
-        pygame.draw.line(layer, HINT_ARROW, start, head_base, 12)
-        pygame.draw.polygon(layer, HINT_ARROW, [tip, head_base + across * 20, head_base - across * 20])
+        scale = self.square_size / SQUARE_SIZE
+        tip = end - direction * 10 * scale
+        head_base = tip - direction * 28 * scale
+        pygame.draw.line(layer, color, start, head_base, round(12 * scale))
+        pygame.draw.polygon(layer, color, [tip, head_base + across * 20 * scale, head_base - across * 20 * scale])
         self.screen.blit(layer, board)
 
     def draw_eval_bar(self):
@@ -1009,22 +1164,48 @@ class ChessGUI:
                 self.screen.blit(label, label.get_rect(midleft=(x + 10, y + CAPTURED_SIZE // 2)))
 
         # The clocks, if there are any, go above the move list
-        list_top = area.y + 40
         if self.clock_ms is not None:
-            self.draw_clocks(pygame.Rect(left, list_top, area.width - 28, 34))
-            list_top += 46
+            self.draw_clocks(pygame.Rect(left, area.y + 40, area.width - 28, 34))
 
-        # The move list fills the rest; once it's full, the oldest moves scroll off the top
-        line_height = 26
-        rows = self.move_list()[-((captured_top - 8 - list_top) // line_height):]
-        for i, (number, white, black) in enumerate(rows):
-            y = list_top + i * line_height
-            if i == len(rows) - 1:  # the latest pair of moves
-                pygame.draw.rect(self.screen, LATEST_MOVE, (left - 6, y - 4, area.width - 16, line_height - 2),
-                                 border_radius=6)
-            columns = ((left, number, MUTED_TEXT), (left + 34, white, TEXT), (left + 104, black, TEXT))
-            for x, text, color in columns:
-                self.screen.blit(self.small_font.render(text, True, color), (x, y))
+        # The move list: the latest move (or the one being reviewed) is lit up, and in
+        # review, mistakes are marked ? and blunders ??
+        current = (len(self.move_texts) if self.review_index is None else self.review_index) - 1
+        for rect, index in self.move_cells():
+            if index % 2 == 0:
+                number = self.small_font.render(f"{index // 2 + 1}.", True, MUTED_TEXT)
+                self.screen.blit(number, (left, rect.y + 4))
+            if index == current:
+                pygame.draw.rect(self.screen, LATEST_MOVE, rect, border_radius=6)
+            label = self.small_font.render(self.move_texts[index], True, TEXT)
+            self.screen.blit(label, (rect.x + 6, rect.y + 4))
+            mark = self.review_marks[index][0] if index < len(self.review_marks) else ""
+            if mark:
+                self.screen.blit(self.small_font.render(mark, True, MARK_COLORS[mark]),
+                                 (rect.x + 6 + label.get_width(), rect.y + 4))
+
+    def draw_review_status(self, bar):
+        """While reviewing: which move is shown, what was wrong with it, and the buttons to step through"""
+        mouse = pygame.mouse.get_pos()
+        buttons = self.review_buttons()
+        for rect, action in buttons:
+            pygame.draw.rect(self.screen, CHOICE_HOVER if rect.collidepoint(mouse) else CHOICE, rect,
+                             border_radius=6)
+            label = self.small_font.render(REVIEW_LABELS[action], True, TEXT)
+            self.screen.blit(label, label.get_rect(center=rect.center))
+
+        index, total = self.review_index, len(self.move_log)
+        text = "Start of the game" if index == 0 else f"Move {index}/{total}: {self.move_texts[index - 1]}"
+        if index and index > len(self.review_marks):
+            text += " (checking...)"
+        elif index:
+            mark, better = self.review_marks[index - 1]
+            if mark:
+                text += f"{mark} better: {move_notation(better, self.gs.rows)}"
+        room = buttons[0][0].x - 16 - 12
+        label = self.font.render(text, True, TEXT)
+        if label.get_width() > room:
+            label = self.small_font.render(text, True, TEXT)
+        self.screen.blit(label, label.get_rect(midleft=(16, bar.centery)))
 
     def draw_clocks(self, rect):
         """Each player's time left, side by side; the one that is running is lit up"""
@@ -1046,6 +1227,9 @@ class ChessGUI:
     def draw_status(self):
         bar = pygame.Rect(0, HEIGHT - STATUS_HEIGHT, WIDTH, STATUS_HEIGHT)
         self.screen.fill(STATUS_BACKGROUND, bar)
+        if self.review_index is not None:
+            self.draw_review_status(bar)
+            return
 
         if self.result is not None:
             text, color = result_line(self.result, self.gs.white_to_move), TEXT
@@ -1098,7 +1282,7 @@ class ChessGUI:
     def draw_dialog(self, title, detail, buttons):
         """A panel over the dimmed board: a title, a line of text and [(rect, label, fill, hover fill)] buttons"""
         self.dim_board()
-        area = pygame.Rect(0, 0, BOARD_AREA_WIDTH - 32, 176)
+        area = pygame.Rect(0, 0, BOARD_AREA_WIDTH - 16, 176)
         area.center = self.board_rect().center
         self.draw_panel(area)
 
@@ -1116,8 +1300,8 @@ class ChessGUI:
 
     def draw_game_over(self):
         title, detail = game_over_text(self.result, self.gs.white_to_move)
-        self.draw_dialog(title, detail, [(self.play_again_rect(), "Play again", BUTTON, BUTTON_HOVER),
-                                         (self.menu_button_rect(), "Menu", BUTTON, BUTTON_HOVER)])
+        self.draw_dialog(title, detail, [(rect, label, BUTTON, BUTTON_HOVER)
+                                         for rect, label, _ in self.game_over_buttons()])
 
     def draw_quit_dialog(self):
         self.draw_dialog("Quit the game?", "This game will be lost",
