@@ -1,6 +1,6 @@
 # Micro Chess
 
-![Micro Chess: a game in progress against the computer, with the move list and captured pieces on the right](docs/screenshot.png)
+![Micro Chess: a game in progress against the computer, with the evaluation bar beside the board and the move list and captured pieces on the right](docs/screenshot.png)
 
 Chess on a 4×5 board, with a pygame interface and a computer opponent.
 
