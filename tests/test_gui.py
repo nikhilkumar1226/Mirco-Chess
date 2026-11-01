@@ -129,6 +129,21 @@ def test_undo_while_the_ai_is_thinking_ignores_its_answer(app):
     assert app.move_log == [] and app.is_human_turn()
 
 
+def broken_search(*args, **kwargs):
+    raise RuntimeError("search failed")
+
+
+def test_a_failed_ai_search_still_plays_a_move(app, monkeypatch, capsys):
+    monkeypatch.setattr(gui, "get_ai_move", broken_search)
+    click(app, "a1")
+    click(app, "a4")
+    app.update()
+    wait_for_ai(app)
+    assert not app.ai_thinking
+    assert len(app.move_log) == 2 and app.is_human_turn()  # a random legal reply
+    assert "search failed" in capsys.readouterr().err  # the error is still reported
+
+
 def test_promotion_picker(app):
     load(app, position({"a5": "black_king", "d1": "white_king", "c4": "white_pawn"}))
     click(app, "c4")
@@ -420,6 +435,15 @@ def test_hint_shows_the_best_move(app):
     assert app.move_log == []  # a hint never plays the move for you
     assert gui.move_notation(app.hint) == "c4-c5=R"
     app.draw()  # the arrow
+
+
+def test_a_failed_hint_search_shows_no_hint(app, monkeypatch, capsys):
+    monkeypatch.setattr(gui, "get_ai_move", broken_search)
+    press(app, pygame.K_h)
+    wait_for_ai(app)
+    assert not app.hint_thinking and app.hint is None
+    assert app.can_ask_for_hint()  # the player can try again
+    assert "search failed" in capsys.readouterr().err
 
 
 def test_hint_button(app):

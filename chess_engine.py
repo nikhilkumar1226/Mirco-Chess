@@ -345,6 +345,8 @@ class Move:
         self.is_castle = is_castle  # the king's two-square move; make_move moves the rook too
 
     def __eq__(self, other):
+        if not isinstance(other, Move):
+            return NotImplemented  # so a move never equals None or anything else
         return (self.start_row, self.start_col, self.end_row, self.end_col, self.promotion_piece) == \
                (other.start_row, other.start_col, other.end_row, other.end_col, other.promotion_piece)
  

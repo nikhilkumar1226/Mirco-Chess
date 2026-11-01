@@ -6,7 +6,9 @@ The AI thinks in a background thread, so the window keeps responding while it se
 import copy
 import os
 import queue
+import random
 import threading
+import traceback
 
 import pygame
 
@@ -289,7 +291,12 @@ class ChessGUI:
         search_id, position = self.search_id, copy.deepcopy(self.gs)
 
         def think():
-            self.search_results.put((search_id, kind, get_ai_move(position, difficulty)))
+            try:
+                move = get_ai_move(position, difficulty)
+            except Exception:
+                traceback.print_exc()
+                move = None  # update() copes with a search that found nothing
+            self.search_results.put((search_id, kind, move))
 
         self.search_thread = threading.Thread(target=think, daemon=True)
         self.search_thread.start()
@@ -340,13 +347,14 @@ class ChessGUI:
             if search_id != self.search_id:
                 continue  # from a search that was cancelled
             # The search used a copy of the game: find the same move in the real one
-            move = next(m for m in self.valid_moves if m == found)
+            move = next((m for m in self.valid_moves if m == found), None)
             if kind == "hint":
                 self.hint_thinking = False
-                self.hint = move
+                self.hint = move  # no arrow if the search failed
             else:
                 self.ai_thinking = False
-                self.play(move)
+                # If the search failed, any legal move keeps the game going
+                self.play(move or random.choice(self.valid_moves))
         if not self.in_menu and self.result is None and not self.is_human_turn() and not self.ai_thinking:
             self.start_search("ai", self.difficulty)
 
