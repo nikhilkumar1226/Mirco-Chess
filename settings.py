@@ -22,6 +22,7 @@ DEFAULTS = {
     "hints": True,
     "coordinates": True,
     "confirm_quit": True,
+    "eval_bar": False,
     "clock": 0,  # minutes on each player's clock, or 0 for no clock
 }
 # Settings that can only take some values

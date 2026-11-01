@@ -101,6 +101,7 @@ Donut                              Pillars
   the Hint button, board coordinates and the "Quit the game?" question. Your settings and your last
   choices on the start menu are remembered between launches
 - An optional chess clock (off unless you choose one)
+- An optional evaluation bar showing who is ahead, by the computer's reckoning
 - Undo, restart, and a game-over screen with **Play again**
 - The computer thinks in a background thread, so the window never freezes
 - A terminal version that needs nothing but Python, with all four boards
@@ -158,6 +159,11 @@ player. The running clock is lit up above the move list and turns red in the las
 your time runs out you lose, unless your opponent has only their king left, which makes it a draw.
 The clock stops while the settings or the "Quit the game?" question are open, and choosing a
 different clock during a game starts both clocks again.
+
+**Evaluation bar:** switch it on in Settings for a bar between the board and the move list. White's
+part grows from White's side of the board as White gets ahead. The number under it is the lead in
+pawns (+1.2 means White is ahead by about a pawn, -0.5 Black by half a pawn), or +M2 / -M2 for a
+forced mate in 2 moves. It comes from a 4-move-deep search after every move, the same as Medium.
 
 In the terminal version, type a move as two squares, such as `d2 d3`. To castle, type the king's
 move (`d1 b1` or `a5 c5`). Type `quit` to leave.

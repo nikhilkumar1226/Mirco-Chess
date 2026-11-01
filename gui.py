@@ -13,7 +13,7 @@ import traceback
 import pygame
 
 import settings
-from ai import get_ai_move
+from ai import get_ai_move, position_score, MATE_SCORE
 from chess_engine import GameState, ROWS, EMPTY, HOLE, VARIANTS
 from sounds import Sounds
 
@@ -83,6 +83,7 @@ SETTING_SWITCHES = [
     ("Hint button", "hints"),
     ("Board coordinates", "coordinates"),
     ("Ask before quitting a game", "confirm_quit"),
+    ("Evaluation bar", "eval_bar"),
     ("Chess clock (min)", "clock"),  # a row of choices instead of a switch
 ]
 SETTINGS_ROW_HEIGHT = 40
@@ -102,6 +103,8 @@ DRAW_TEXT = {
     "time_draw": ("Time's up!", "Draw: no pieces left to win"),
 }
 LOW_TIME_MS = 10_000  # a clock turns red when it gets this low
+EVAL_BAR_DEPTH = 4  # how deep the search for the evaluation bar looks (as deep as Medium)
+EVAL_BAR = pygame.Rect(BOARD_X + BOARD_AREA_WIDTH + 5, BOARD_Y, 10, BOARD_AREA_HEIGHT)  # between board and panel
 
 
 def load_piece_images(size):
@@ -136,6 +139,26 @@ def clock_text(ms):
         return f"{ms / 1000:.1f}"
     seconds = -(-ms // 1000)  # rounded up, so a fresh 3-minute clock shows 3:00
     return f"{seconds // 60}:{seconds % 60:02d}"
+
+
+def score_text(score):
+    """The evaluation bar's number: pawns ahead for White (+1.2) or Black (-0.5), the moves
+    to a forced mate (+M2), or the result once a side has been mated (1-0 or 0-1)"""
+    if abs(score) >= MATE_SCORE - 100:
+        moves = (MATE_SCORE - abs(score)) // 2
+        if moves == 0:
+            return "1-0" if score > 0 else "0-1"
+        return f"{'+' if score > 0 else '-'}M{moves}"
+    if round(score / 100, 1) == 0:
+        return "0.0"
+    return f"{score / 100:+.1f}"
+
+
+def white_share(score):
+    """How much of the evaluation bar is White's: a half when even, nearly all of it 4 pawns up"""
+    if abs(score) >= MATE_SCORE - 100:
+        return 1.0 if score > 0 else 0.0
+    return 1 / (1 + 10 ** (-score / 400))
 
 
 def has_only_king(board, color):
@@ -260,6 +283,8 @@ class ChessGUI:
     def toggle_setting(self, name):
         self.settings[name] = not self.settings[name]
         self.sounds.muted = not self.settings["sound"]
+        if name == "eval_bar":
+            self.update_eval()
         if name == "hints" and (self.hint or self.hint_thinking):
             self.hint = None
             self.cancel_search()  # forget the hint being worked out (the AI restarts if it was thinking)
@@ -314,6 +339,11 @@ class ChessGUI:
         self.result = self.gs.get_game_result()
         self.check = self.gs.in_check()
         self.last_move = self.move_log[-1] if self.move_log else None
+        self.update_eval()
+
+    def update_eval(self):
+        """The score for the evaluation bar (None while the bar is switched off)"""
+        self.eval_score = position_score(self.gs, EVAL_BAR_DEPTH) if self.settings["eval_bar"] else None
 
     def play(self, move, animate=True):
         self.gs.make_move(move)
@@ -741,6 +771,8 @@ class ChessGUI:
         self.draw_board()
         if self.settings["coordinates"]:
             self.draw_coordinates()
+        if self.eval_score is not None:
+            self.draw_eval_bar()
         self.draw_side_panel()
         self.draw_status()
         if self.dragging:
@@ -915,6 +947,16 @@ class ChessGUI:
         pygame.draw.line(layer, HINT_ARROW, start, head_base, 12)
         pygame.draw.polygon(layer, HINT_ARROW, [tip, head_base + across * 20, head_base - across * 20])
         self.screen.blit(layer, board)
+
+    def draw_eval_bar(self):
+        """Who is ahead, by the AI's reckoning: White's part of the bar grows from White's side"""
+        white_height = round(EVAL_BAR.height * white_share(self.eval_score))
+        self.screen.fill((40, 44, 40), EVAL_BAR)
+        white_y = EVAL_BAR.y if self.flipped else EVAL_BAR.bottom - white_height
+        self.screen.fill((240, 240, 235), (EVAL_BAR.x, white_y, EVAL_BAR.width, white_height))
+        pygame.draw.rect(self.screen, MUTED_TEXT, EVAL_BAR, 1)
+        label = self.small_font.render(score_text(self.eval_score), True, MUTED_TEXT)
+        self.screen.blit(label, label.get_rect(center=(EVAL_BAR.centerx, EVAL_BAR.bottom + 16)))
 
     def draw_dragged_piece(self):
         """The piece being dragged, under the mouse and on top of everything else"""

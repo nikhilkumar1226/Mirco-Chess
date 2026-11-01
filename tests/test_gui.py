@@ -645,6 +645,51 @@ def test_clock_text():
     assert gui.clock_text(0) == "0.0"
 
 
+def bar_colors(app):
+    """The colors down the middle of the evaluation bar, top to bottom"""
+    bar = gui.EVAL_BAR
+    return [tuple(app.screen.get_at((bar.centerx, y)))[:3] for y in range(bar.y + 2, bar.bottom - 2)]
+
+
+def test_evaluation_bar_is_off_unless_switched_on(app):
+    assert app.eval_score is None
+    app.draw()
+    assert (240, 240, 235) not in bar_colors(app)
+
+
+def test_evaluation_bar_follows_the_game(app):
+    app.toggle_setting("eval_bar")
+    assert app.eval_score is not None
+    app.draw()
+    colors = bar_colors(app)
+    assert (240, 240, 235) in colors and (40, 44, 40) in colors
+    click(app, "a1")
+    click(app, "a4")  # takes a pawn, but Black's king takes the rook back
+    assert app.eval_score < -200
+    assert gui.ChessGUI().settings["eval_bar"]  # remembered next time
+
+
+def test_evaluation_bar_shows_a_forced_mate(app):
+    app.toggle_setting("eval_bar")
+    load(app, position({"a5": "black_king", "c4": "white_pawn", "b3": "white_king"}))  # c4-c5=R mates
+    assert gui.score_text(app.eval_score) == "+M1"
+    app.draw()
+    assert set(bar_colors(app)) == {(240, 240, 235)}  # all White's
+    app.flipped = True
+    app.draw()
+    assert set(bar_colors(app)) == {(240, 240, 235)}
+
+
+def test_score_text():
+    assert gui.score_text(0) == "0.0"
+    assert gui.score_text(4) == "0.0"
+    assert gui.score_text(120) == "+1.2"
+    assert gui.score_text(-50) == "-0.5"
+    assert gui.score_text(gui.MATE_SCORE - 2) == "+M1"
+    assert gui.score_text(-(gui.MATE_SCORE - 4)) == "-M2"
+    assert gui.score_text(-(gui.MATE_SCORE - 1)) == "0-1"  # Black has mated
+
+
 def test_drag_a_piece_to_move_it(app, monkeypatch):
     monkeypatch.setattr(gui, "ANIMATION_MS", 10_000)
     drag(app, "a1", "a4")

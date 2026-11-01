@@ -338,6 +338,14 @@ def minimax_alpha_beta(game_state, depth, alpha, beta, maximizing_player, ply=1)
         return 0  # Stalemate is a draw
     return best
 
+def position_score(game_state, depth):
+    """How good the position is for White, in centipawns, from a search `depth` plies deep.
+
+    A forced mate scores close to MATE_SCORE (less the moves it takes), negative if Black mates.
+    """
+    return minimax_alpha_beta(game_state, depth, float('-inf'), float('inf'), game_state.white_to_move)
+
+
 def get_ai_move(game_state, difficulty="medium", depth=None, rng=None):
     """
     Main AI function - Get the best move using Minimax + Alpha-Beta Pruning
