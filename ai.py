@@ -12,6 +12,10 @@ from chess_engine import ROWS, COLS, KNIGHT_OFFSETS, ROOK_DIRECTIONS, BISHOP_DIR
 
 # How many moves (plies) ahead the AI looks at each difficulty level
 DIFFICULTY_DEPTHS = {"easy": 2, "medium": 4, "hard": 6}
+# How many centipawns worse than the best move a move may score and still be picked.
+# Easy chooses at random from every move that is at most three pawns worse, so it
+# sometimes gives away a knight or bishop, as a beginner would. The others play their best.
+DIFFICULTY_MARGINS = {"easy": 300, "medium": 0, "hard": 0}
 
 # Score for checkmate, far above any normal evaluation (which stays within a few thousand).
 # A mate found sooner scores higher, so the AI goes for the fastest win
@@ -295,17 +299,19 @@ def get_ai_move(game_state, difficulty="medium", depth=None, rng=None):
 
     Args:
         game_state: Current game state
-        difficulty: "easy", "medium" or "hard" (sets how deep the AI searches)
-        depth: Optional exact search depth, overrides difficulty
-        rng: Optional random.Random, used to choose between equally good moves
+        difficulty: "easy", "medium" or "hard" (sets how deep the AI searches, and
+            how much worse than the best move its choice may be)
+        depth: Optional exact search depth, overrides difficulty's depth
+        rng: Optional random.Random, used to choose between moves that are good enough
 
     Returns:
         Best move for current player, or None if no moves available
     """
+    if difficulty not in DIFFICULTY_DEPTHS:
+        raise ValueError(f"difficulty must be one of {list(DIFFICULTY_DEPTHS)}, not {difficulty!r}")
     if depth is None:
-        if difficulty not in DIFFICULTY_DEPTHS:
-            raise ValueError(f"difficulty must be one of {list(DIFFICULTY_DEPTHS)}, not {difficulty!r}")
         depth = DIFFICULTY_DEPTHS[difficulty]
+    margin = DIFFICULTY_MARGINS[difficulty]
     rng = rng or random
 
     valid_moves = game_state.get_valid_moves()
@@ -314,27 +320,26 @@ def get_ai_move(game_state, difficulty="medium", depth=None, rng=None):
 
     # White wants the highest score, Black the lowest
     ai_is_white = game_state.white_to_move
-    best_moves = []
+    scored_moves = []
     best_score = float('-inf') if ai_is_white else float('inf')
 
     # Evaluate each possible move
     for move in order_moves(valid_moves):
         game_state.make_move(move)
         # After our move it's the opponent's turn: they maximize if they are White.
-        # The window stops one point short of the best score so far: that still prunes
-        # worse moves, but moves exactly as good get their exact score (scores are
-        # whole numbers), so we can spot ties.
+        # The window stops one point past the margin below the best score so far: that
+        # still prunes worse moves, but moves within the margin get their exact score
+        # (scores are whole numbers), so we know which ones are good enough.
         if ai_is_white:
-            score = minimax_alpha_beta(game_state, depth - 1, best_score - 1, float('inf'), False)
+            score = minimax_alpha_beta(game_state, depth - 1, best_score - margin - 1, float('inf'), False)
         else:
-            score = minimax_alpha_beta(game_state, depth - 1, float('-inf'), best_score + 1, True)
+            score = minimax_alpha_beta(game_state, depth - 1, float('-inf'), best_score + margin + 1, True)
         game_state.undo_move(move)
 
-        if (ai_is_white and score > best_score) or (not ai_is_white and score < best_score):
-            best_score = score
-            best_moves = [move]
-        elif score == best_score:
-            best_moves.append(move)
+        scored_moves.append((score, move))
+        best_score = max(best_score, score) if ai_is_white else min(best_score, score)
 
-    # Several moves can be equally good: pick one at random so games differ
-    return rng.choice(best_moves)
+    if abs(best_score) >= MATE_SCORE - 100:
+        margin = 0  # a mate is coming: take the quickest win, or put off the loss the longest
+    # Pick at random between the moves within the margin (with no margin, the equally good ones)
+    return rng.choice([move for score, move in scored_moves if abs(score - best_score) <= margin])

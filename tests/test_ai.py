@@ -3,7 +3,8 @@ import time
 
 import pytest
 
-from ai import get_ai_move, evaluate_board, DIFFICULTY_DEPTHS, MATE_SCORE
+from ai import (get_ai_move, evaluate_board, minimax_alpha_beta, DIFFICULTY_DEPTHS,
+                DIFFICULTY_MARGINS, MATE_SCORE)
 from chess_engine import GameState
 from helpers import position, square
 
@@ -73,6 +74,35 @@ def test_same_seed_gives_same_move():
     a = get_ai_move(GameState(), "medium", rng=random.Random(7))
     b = get_ai_move(GameState(), "medium", rng=random.Random(7))
     assert a == b
+
+
+def exact_score(gs, move, depth):
+    """The move's score from a search without any pruning window"""
+    gs.make_move(move)
+    score = minimax_alpha_beta(gs, depth - 1, float("-inf"), float("inf"), gs.white_to_move)
+    gs.undo_move(move)
+    return score
+
+
+def test_easy_picks_varied_moves_within_its_margin():
+    gs = GameState()
+    scores = [(move, exact_score(gs, move, DIFFICULTY_DEPTHS["easy"])) for move in gs.get_valid_moves()]
+    best = max(score for _, score in scores)
+    allowed = [move for move, score in scores if best - score <= DIFFICULTY_MARGINS["easy"]]
+    chosen = [get_ai_move(gs, "easy", rng=random.Random(seed)) for seed in range(30)]
+    assert all(move in allowed for move in chosen)
+    assert len({(m.start_row, m.start_col, m.end_row, m.end_col) for m in chosen}) > 1
+
+
+@pytest.mark.parametrize("pieces, white_to_move, mate", [
+    ({"a5": "black_king", "c4": "white_pawn", "b3": "white_king"}, True, ("c4", "c5")),
+    ({"c3": "black_king", "a4": "black_rook", "d1": "white_king"}, False, ("a4", "a1")),
+])
+def test_easy_never_misses_a_mate_in_one(pieces, white_to_move, mate):
+    gs = position(pieces, white_to_move)
+    for seed in range(20):
+        move = get_ai_move(gs, "easy", rng=random.Random(seed))
+        assert is_move(move, *mate) and move.promotion_piece in (None, "rook")
 
 
 def turned_around(gs):

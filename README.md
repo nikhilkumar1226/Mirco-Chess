@@ -136,6 +136,9 @@ A few more details:
   quickest win and puts off a loss as long as it can.
 - Draws by stalemate, repetition or insufficient material score 0.
 - When several moves score exactly the same, it picks one of them at random.
+- On Easy it picks at random from all the moves that score at most 300 (three pawns) below its best,
+  so it sometimes gives away a knight or bishop and plays more varied games. It still always takes a
+  checkmate in one when it has one.
 
 Hard usually answers in well under a second.
 
