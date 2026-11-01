@@ -1,7 +1,13 @@
-"""Micro Chess rules: the board, how pieces move, check, checkmate and draws."""
+"""Micro Chess rules: the board, how pieces move, check, checkmate and draws.
 
-ROWS, COLS = 5, 4
+The board can have other sizes, and holes, for the other game modes (see VARIANTS).
+"""
+
+from dataclasses import dataclass
+
+ROWS, COLS = 5, 4  # the size of the Micro Chess board
 EMPTY = "--"
+HOLE = "##"  # a square cut out of the board: nothing can stand on it or slide across it
 PROMOTION_PIECES = ("rook", "bishop", "knight")  # what a pawn can become
 
 KNIGHT_OFFSETS = [(2, 1), (2, -1), (-2, 1), (-2, -1), (1, 2), (1, -2), (-1, 2), (-1, -2)]
@@ -16,28 +22,100 @@ CASTLING_SQUARES = {
     "black": ((0, 0), (0, 2), (0, 3), (0, 1)),  # King a5-c5, Rook d5-b5
 }
 
+# The letters used to write starting positions
+PIECE_LETTERS = {"k": "king", "r": "rook", "b": "bishop", "n": "knight", "p": "pawn"}
+
+
+@dataclass(frozen=True, eq=False)
+class Variant:
+    """A game mode: the board's shape, the starting position and which draws apply.
+
+    layout is the board as seen from White's side, one string per rank from the top
+    (Black's side) down: uppercase letters are White's pieces, lowercase Black's,
+    "." is an empty square and "#" a hole.
+    """
+    key: str
+    name: str
+    description: str
+    layout: tuple
+    castling: dict = None  # the CASTLING_SQUARES of the sides that may castle
+    # Whether a king with a lone knight, or kings with only bishops on one color of
+    # square, are draws. Each is True only if no checkmate exists with those pieces on
+    # this board (holes can trap a king, so it differs from board to board).
+    lone_knight_draws: bool = True
+    same_color_bishops_draw: bool = True
+
+    def start_board(self):
+        board = []
+        for rank in self.layout:
+            row = []
+            for letter in rank:
+                if letter == ".":
+                    row.append(EMPTY)
+                elif letter == "#":
+                    row.append(HOLE)
+                else:
+                    color = "white" if letter.isupper() else "black"
+                    row.append(f"{color}_{PIECE_LETTERS[letter.lower()]}")
+            board.append(row)
+        return board
+
+
+MICRO = Variant(
+    key="micro", name="Micro", description="The classic 4x5 board",
+    layout=("knbr",
+            "p...",
+            "....",
+            "...P",
+            "RBNK"),
+    castling=CASTLING_SQUARES,
+)
+# The other boards were picked by having the AI play hundreds of games on candidate
+# starting positions and keeping ones where White and Black win about equally often.
+TINY = Variant(
+    key="tiny", name="Tiny", description="4x4, the quickest games",
+    layout=("kbrn",
+            ".p..",
+            "..P.",
+            "NRBK"),
+)
+DONUT = Variant(
+    key="donut", name="Donut", description="5x5 with a hole in the middle",
+    layout=("rn.bk",
+            "pp...",
+            "..#..",
+            "...PP",
+            "KB.NR"),
+)
+PILLARS = Variant(
+    key="pillars", name="Pillars", description="5x5 with two holes beside the center",
+    layout=("k.nrb",
+            "p...p",
+            ".#.#.",
+            "P...P",
+            "BRN.K"),
+)
+VARIANTS = {variant.key: variant for variant in (MICRO, TINY, DONUT, PILLARS)}
+
 
 class GameState:
-    def __init__(self, board=None, white_to_move=True):
+    def __init__(self, board=None, white_to_move=True, variant=MICRO):
         """Start a new game, or set up a custom position by passing a board.
 
         In a custom position a side may castle if its king and rook are on their starting squares.
         """
+        self.variant = variant
         if board is None:
-            board = [
-                ["black_king", "black_knight", "black_bishop", "black_rook"],
-                ["black_pawn", "--", "--", "--"],
-                ["--", "--", "--", "--"],
-                ["--", "--", "--", "white_pawn"],
-                ["white_rook", "white_bishop", "white_knight", "white_king"]
-            ]
+            board = variant.start_board()
         self.board = [row[:] for row in board]
+        self.rows, self.cols = len(self.board), len(self.board[0])
         self.white_to_move = white_to_move
         self.white_king_location = self.find_piece("white_king")
         self.black_king_location = self.find_piece("black_king")
         # The colors that may still castle, and the rights before each move (for undo_move)
+        self.castling_squares = variant.castling or {}
         self.castling_rights = frozenset(
-            color for color, (king_from, _, rook_from, _) in CASTLING_SQUARES.items()
+            color for color, (king_from, _, rook_from, _) in self.castling_squares.items()
             if self.board[king_from[0]][king_from[1]] == f"{color}_king"
             and self.board[rook_from[0]][rook_from[1]] == f"{color}_rook"
         )
@@ -50,8 +128,8 @@ class GameState:
         return tuple(tuple(row) for row in self.board), self.white_to_move, self.castling_rights
 
     def find_piece(self, piece):
-        for r in range(ROWS):
-            for c in range(COLS):
+        for r in range(self.rows):
+            for c in range(self.cols):
                 if self.board[r][c] == piece:
                     return (r, c)
         return None
@@ -94,14 +172,14 @@ class GameState:
         """True if neither side has the pieces to checkmate, however the game goes on.
 
         That's when the kings are left with at most one knight, or with only bishops
-        that all stand on squares of the same color (a bishop never changes color).
-        No checkmate exists with these pieces on a 4x5 board.
+        that all stand on squares of the same color (a bishop never changes color),
+        on boards where no checkmate exists with those pieces (see Variant).
         """
         knights = 0
         bishop_colors = set()
         for r, row in enumerate(self.board):
             for c, piece in enumerate(row):
-                if piece == EMPTY or piece.endswith("king"):
+                if piece in (EMPTY, HOLE) or piece.endswith("king"):
                     continue
                 if piece.endswith("knight"):
                     knights += 1
@@ -110,8 +188,8 @@ class GameState:
                 else:
                     return False  # a pawn or a rook can still lead to checkmate
         if knights:
-            return knights == 1 and not bishop_colors
-        return len(bishop_colors) <= 1
+            return knights == 1 and not bishop_colors and self.variant.lone_knight_draws
+        return not bishop_colors or (len(bishop_colors) == 1 and self.variant.same_color_bishops_draw)
 
     def get_all_possible_moves(self):
         """Moves that follow how each piece moves, without checking if the king is left in check."""
@@ -136,20 +214,23 @@ class GameState:
                         self.get_castle_moves(r, c, moves)
         return moves
 
+    def on_board(self, r, c):
+        return 0 <= r < self.rows and 0 <= c < self.cols
+
     def get_pawn_moves(self, r, c, moves):
         direction = -1 if self.white_to_move else 1
-        promotion_row = 0 if self.white_to_move else 4
+        promotion_row = 0 if self.white_to_move else self.rows - 1
 
         targets = []
 
         # Forward move
-        if 0 <= r + direction < 5 and self.board[r + direction][c] == "--":
+        if self.on_board(r + direction, c) and self.board[r + direction][c] == "--":
             targets.append((r + direction, c))
 
         # Capture moves
         for dc in [-1, 1]:
             nr, nc = r + direction, c + dc
-            if 0 <= nr < 5 and 0 <= nc < 4:
+            if self.on_board(nr, nc):
                 target = self.board[nr][nc]
                 if target != "--" and target.startswith("white" if not self.white_to_move else "black"):
                     targets.append((nr, nc))
@@ -164,11 +245,17 @@ class GameState:
                 moves.append(Move((r, c), (nr, nc), self.board))
 
     def get_knight_moves(self, r, c, moves):
+        """Knights jump, so pieces and holes in between don't matter"""
+        self.get_step_moves(r, c, KNIGHT_OFFSETS, moves)
+
+    def get_step_moves(self, r, c, offsets, moves):
+        """Knight and king: one jump or step to an empty square or an enemy piece"""
         ally = "white" if self.white_to_move else "black"
-        for dr, dc in KNIGHT_OFFSETS:
+        for dr, dc in offsets:
             nr, nc = r + dr, c + dc
-            if 0 <= nr < 5 and 0 <= nc < 4:
-                if self.board[nr][nc] == "--" or not self.board[nr][nc].startswith(ally):
+            if self.on_board(nr, nc):
+                target = self.board[nr][nc]
+                if target != HOLE and not target.startswith(ally):
                     moves.append(Move((r, c), (nr, nc), self.board))
 
     def get_rook_moves(self, r, c, moves):
@@ -178,28 +265,23 @@ class GameState:
         self.get_sliding_moves(r, c, BISHOP_DIRECTIONS, moves)
 
     def get_sliding_moves(self, r, c, directions, moves):
-        """Rook and bishop: slide in each direction until hitting the edge or a piece."""
-        ally = "white" if self.white_to_move else "black"
+        """Rook and bishop: slide in each direction until hitting the edge, a hole or a piece."""
+        enemy = "black" if self.white_to_move else "white"
         for dr, dc in directions:
             nr, nc = r + dr, c + dc
-            while 0 <= nr < 5 and 0 <= nc < 4:
+            while self.on_board(nr, nc):
                 if self.board[nr][nc] == "--":
                     moves.append(Move((r, c), (nr, nc), self.board))
-                elif not self.board[nr][nc].startswith(ally):
+                elif self.board[nr][nc].startswith(enemy):
                     moves.append(Move((r, c), (nr, nc), self.board))
                     break
                 else:
-                    break
+                    break  # our own piece, or a hole
                 nr += dr
                 nc += dc
 
     def get_king_moves(self, r, c, moves):
-        ally = "white" if self.white_to_move else "black"
-        for dr, dc in KING_OFFSETS:
-            nr, nc = r + dr, c + dc
-            if 0 <= nr < 5 and 0 <= nc < 4:
-                if self.board[nr][nc] == "--" or not self.board[nr][nc].startswith(ally):
-                    moves.append(Move((r, c), (nr, nc), self.board))
+        self.get_step_moves(r, c, KING_OFFSETS, moves)
 
     def get_castle_moves(self, r, c, moves):
         """Castling: allowed only if neither the king nor its rook has moved (and the rook
@@ -209,7 +291,7 @@ class GameState:
         color = "white" if self.white_to_move else "black"
         if color not in self.castling_rights:
             return
-        king_from, king_to, rook_from, rook_to = CASTLING_SQUARES[color]
+        king_from, king_to, rook_from, rook_to = self.castling_squares[color]
         if (r, c) != king_from:
             return
         row = king_from[0]
@@ -234,7 +316,7 @@ class GameState:
 
     def piece_at(self, r, c):
         """The piece on a square, or None if the square is off the board"""
-        if 0 <= r < ROWS and 0 <= c < COLS:
+        if 0 <= r < self.rows and 0 <= c < self.cols:
             return self.board[r][c]
         return None
 
@@ -260,11 +342,11 @@ class GameState:
             if self.piece_at(r + dr, c + dc) == enemy + "_king":
                 return True
 
-        # Rooks and bishops: walk along each line until we hit a piece
+        # Rooks and bishops: walk along each line until we hit a piece or a hole
         for directions, slider in ((ROOK_DIRECTIONS, "_rook"), (BISHOP_DIRECTIONS, "_bishop")):
             for dr, dc in directions:
                 nr, nc = r + dr, c + dc
-                while 0 <= nr < ROWS and 0 <= nc < COLS:
+                while 0 <= nr < self.rows and 0 <= nc < self.cols:
                     piece = self.board[nr][nc]
                     if piece != EMPTY:
                         if piece == enemy + slider:
@@ -288,7 +370,7 @@ class GameState:
         # Castling: the rook jumps over to the square the king crossed
         if move.is_castle:
             color = move.piece_moved.split("_")[0]
-            _, _, (rook_r, rook_c), (to_r, to_c) = CASTLING_SQUARES[color]
+            _, _, (rook_r, rook_c), (to_r, to_c) = self.castling_squares[color]
             self.board[rook_r][rook_c] = EMPTY
             self.board[to_r][to_c] = f"{color}_rook"
 
@@ -305,7 +387,7 @@ class GameState:
             touched = {(move.start_row, move.start_col), (move.end_row, move.end_col)}
             self.castling_rights = frozenset(
                 color for color in self.castling_rights
-                if not touched & {CASTLING_SQUARES[color][0], CASTLING_SQUARES[color][2]}
+                if not touched & {self.castling_squares[color][0], self.castling_squares[color][2]}
             )
 
         self.white_to_move = not self.white_to_move
@@ -319,7 +401,7 @@ class GameState:
         # Put a castled rook back in its corner
         if move.is_castle:
             color = move.piece_moved.split("_")[0]
-            _, _, (rook_r, rook_c), (to_r, to_c) = CASTLING_SQUARES[color]
+            _, _, (rook_r, rook_c), (to_r, to_c) = self.castling_squares[color]
             self.board[to_r][to_c] = EMPTY
             self.board[rook_r][rook_c] = f"{color}_rook"
 

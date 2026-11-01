@@ -13,20 +13,20 @@ import traceback
 import pygame
 
 from ai import get_ai_move
-from chess_engine import GameState, ROWS, COLS, EMPTY, CASTLING_SQUARES
+from chess_engine import GameState, ROWS, EMPTY, HOLE, VARIANTS
 from sounds import Sounds
 
 # Layout, in pixels
-SQUARE_SIZE = 80
-PIECE_SIZE = 64
-BOARD_X, BOARD_Y = 36, 20  # top-left corner of the board; the margins hold the coordinates
-BOARD_WIDTH, BOARD_HEIGHT = COLS * SQUARE_SIZE, ROWS * SQUARE_SIZE
+BOARD_X, BOARD_Y = 36, 20  # top-left corner of the space for the board; the margins hold the coordinates
+BOARD_AREA_WIDTH, BOARD_AREA_HEIGHT = 320, 400  # every board is sized to fit this space
+SQUARE_SIZE = 80  # the biggest a square gets (on boards 4 squares wide); wider boards get smaller ones
+PICKER_SIZE = 80  # each choice in the promotion picker
 STATUS_HEIGHT = 48
-SIDE_PANEL_X = BOARD_X + BOARD_WIDTH + 20  # the move list and captured pieces, right of the board
+SIDE_PANEL_X = BOARD_X + BOARD_AREA_WIDTH + 20  # the move list and captured pieces, right of the board
 SIDE_PANEL_WIDTH = 196
 CAPTURED_SIZE = 28  # captured pieces are shown small
 WIDTH = SIDE_PANEL_X + SIDE_PANEL_WIDTH + 16
-HEIGHT = BOARD_Y + BOARD_HEIGHT + 32 + STATUS_HEIGHT
+HEIGHT = BOARD_Y + BOARD_AREA_HEIGHT + 32 + STATUS_HEIGHT
 FPS = 60
 ANIMATION_MS = 160  # how long a piece takes to slide to its new square
 
@@ -34,6 +34,8 @@ ANIMATION_MS = 160  # how long a piece takes to slide to its new square
 DARK_SQUARE = pygame.Color("#96b68d")
 LIGHT_SQUARE = pygame.Color("#c8d6c9")
 BACKGROUND = pygame.Color("#262b25")
+HOLE_COLOR = pygame.Color("#1a1e19")
+HOLE_EDGE = pygame.Color("#11140f")
 STATUS_BACKGROUND = pygame.Color("#1c201b")
 PANEL = pygame.Color("#eef2ec")
 SIDE_PANEL = pygame.Color("#2f362d")
@@ -56,18 +58,20 @@ GHOST_ALPHA = 90  # how faint a dragged piece's starting square looks
 CHECK = (225, 40, 30)
 DIM = (10, 14, 10, 150)
 
-FILES = "abcd"
+FILES = "abcdef"
 IMAGE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "images")
 PIECE_NAMES = [f"{color}_{kind}" for color in ("white", "black")
                for kind in ("king", "rook", "bishop", "knight", "pawn")]
 
 # Start menu: (heading, the setting it changes, [(button label, value), ...])
 MENU_CHOICES = [
+    ("Board", "variant_key", [(variant.name, key) for key, variant in VARIANTS.items()]),
     ("Opponent", "two_players", [("Computer", False), ("2 Players", True)]),
     ("Play as", "human_is_white", [("White", True), ("Black", False)]),
     ("Difficulty", "difficulty", [("Easy", "easy"), ("Medium", "medium"), ("Hard", "hard")]),
 ]
-MENU_WIDTH = 312
+MENU_WIDTH = 400
+ICON_SQUARE = 6  # the size of a square in the little pictures of the boards on the menu
 
 HINT_DIFFICULTY = "hard"  # hints come from the strongest search
 
@@ -92,31 +96,33 @@ def load_piece_images(size):
     return images
 
 
-def square_name(r, c):
-    return f"{FILES[c]}{ROWS - r}"
+def square_name(r, c, rows=ROWS):
+    """The name of square (row, col) on a board with this many rows, e.g. "a1" """
+    return f"{FILES[c]}{rows - r}"
 
 
-def move_notation(move):
+def move_notation(move, rows=ROWS):
     """The move for the move list: d2-d3, a1xa4 (a capture), c4-c5=R (promotion) or O-O (castling)"""
     if move.is_castle:
         return "O-O"
     separator = "x" if move.piece_captured != EMPTY else "-"
-    text = square_name(move.start_row, move.start_col) + separator + square_name(move.end_row, move.end_col)
+    text = (square_name(move.start_row, move.start_col, rows) + separator
+            + square_name(move.end_row, move.end_col, rows))
     if move.is_promotion:
         text += "=" + PIECE_LETTERS[move.promotion_piece]
     return text
 
 
-def translucent_square(rgba):
-    surface = pygame.Surface((SQUARE_SIZE, SQUARE_SIZE), pygame.SRCALPHA)
+def translucent_square(rgba, size):
+    surface = pygame.Surface((size, size), pygame.SRCALPHA)
     surface.fill(rgba)
     return surface
 
 
-def check_glow():
+def check_glow(size):
     """A red glow, strongest in the middle, drawn under a king that is in check"""
-    surface = pygame.Surface((SQUARE_SIZE, SQUARE_SIZE), pygame.SRCALPHA)
-    center = SQUARE_SIZE // 2
+    surface = pygame.Surface((size, size), pygame.SRCALPHA)
+    center = size // 2
     for radius in range(center, 0, -2):
         alpha = int(230 * (1 - radius / center) ** 0.6)
         pygame.draw.circle(surface, (*CHECK, alpha), (center, center), radius)
@@ -145,7 +151,7 @@ class ChessGUI:
         pygame.display.set_caption("Micro Chess")
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
         self.clock = pygame.time.Clock()
-        self.images = load_piece_images(PIECE_SIZE)
+        self.piece_images = {}  # piece size -> images, loaded when a board needs that size
         self.small_images = load_piece_images(CAPTURED_SIZE)
         self.sounds = Sounds()
         self.font = pygame.font.Font(None, 28)
@@ -153,16 +159,8 @@ class ChessGUI:
         self.big_font = pygame.font.Font(None, 44)
         self.title_font = pygame.font.Font(None, 64)
 
-        self.last_move_overlay = translucent_square(LAST_MOVE)
-        self.selected_overlay = translucent_square(SELECTED)
-        self.check_overlay = check_glow()
-        self.move_dot = pygame.Surface((SQUARE_SIZE, SQUARE_SIZE), pygame.SRCALPHA)
-        pygame.draw.circle(self.move_dot, MOVE_HINT, (SQUARE_SIZE // 2, SQUARE_SIZE // 2), 13)
-        self.capture_ring = pygame.Surface((SQUARE_SIZE, SQUARE_SIZE), pygame.SRCALPHA)
-        pygame.draw.circle(self.capture_ring, MOVE_HINT, (SQUARE_SIZE // 2, SQUARE_SIZE // 2),
-                           SQUARE_SIZE // 2 - 2, 7)
-
         # Settings chosen on the start menu
+        self.variant_key = "micro"
         self.two_players = False
         self.human_is_white = True
         self.difficulty = "medium"
@@ -187,7 +185,8 @@ class ChessGUI:
         self.cancel_search()
 
     def new_game(self):
-        self.gs = GameState()
+        self.gs = GameState(variant=VARIANTS[self.variant_key])
+        self.layout_board()
         self.move_log = []  # every move played, so U can take moves back
         self.move_texts = []  # the same moves as written in the move list, e.g. "d2-d3+"
         self.selected = None  # (row, col) of the piece the player picked up
@@ -201,6 +200,26 @@ class ChessGUI:
         self.flipped = not self.two_players and not self.human_is_white
         self.cancel_search()
         self.refresh()
+
+    def layout_board(self):
+        """Size the squares so this game's board fits its space, and make what's drawn on them"""
+        rows, cols = self.gs.rows, self.gs.cols
+        size = self.square_size = min(SQUARE_SIZE, BOARD_AREA_WIDTH // cols, BOARD_AREA_HEIGHT // rows)
+        # Centered in the space for the board
+        self.board_x = BOARD_X + (BOARD_AREA_WIDTH - cols * size) // 2
+        self.board_y = BOARD_Y + (BOARD_AREA_HEIGHT - rows * size) // 2
+        piece_size = size * 4 // 5
+        if piece_size not in self.piece_images:
+            self.piece_images[piece_size] = load_piece_images(piece_size)
+        self.images = self.piece_images[piece_size]
+
+        self.last_move_overlay = translucent_square(LAST_MOVE, size)
+        self.selected_overlay = translucent_square(SELECTED, size)
+        self.check_overlay = check_glow(size)
+        self.move_dot = pygame.Surface((size, size), pygame.SRCALPHA)
+        pygame.draw.circle(self.move_dot, MOVE_HINT, (size // 2, size // 2), size // 6)
+        self.capture_ring = pygame.Surface((size, size), pygame.SRCALPHA)
+        pygame.draw.circle(self.capture_ring, MOVE_HINT, (size // 2, size // 2), size // 2 - 2, size // 11)
 
     def refresh(self):
         """Work out the legal moves and the game's status after the position changed"""
@@ -221,7 +240,7 @@ class ChessGUI:
         self.cancel_search()  # a hint still being worked out is no use now
         self.refresh()
         suffix = "#" if self.result == "checkmate" else "+" if self.check else ""
-        self.move_texts.append(move_notation(move) + suffix)
+        self.move_texts.append(move_notation(move, self.gs.rows) + suffix)
 
     def undo(self):
         """Take back your last move and the AI's reply to it (one move in a 2-player game)"""
@@ -274,7 +293,7 @@ class ChessGUI:
     def material_balance(self):
         """White's material minus Black's (pawn = 1, knight and bishop = 3, rook = 5)"""
         return sum(MATERIAL[piece.split("_")[1]] * (1 if piece.startswith("white") else -1)
-                   for row in self.gs.board for piece in row if piece != EMPTY)
+                   for row in self.gs.board for piece in row if piece not in (EMPTY, HOLE))
 
     # ---- AI ---------------------------------------------------------------
 
@@ -333,7 +352,7 @@ class ChessGUI:
         pieces = [(move.piece_moved, (move.start_row, move.start_col), (move.end_row, move.end_col))]
         if move.is_castle:
             color = move.piece_moved.split("_")[0]
-            _, _, rook_from, rook_to = CASTLING_SQUARES[color]
+            _, _, rook_from, rook_to = self.gs.castling_squares[color]
             pieces.append((f"{color}_rook", rook_from, rook_to))
         t = elapsed / ANIMATION_MS
         return pieces, 1 - (1 - t) ** 3  # ease out: fast at first, then settle
@@ -486,26 +505,28 @@ class ChessGUI:
     def square_rect(self, r, c):
         """Where square (row, col) is drawn on the screen"""
         if self.flipped:  # turned around, so a5 is bottom right
-            r, c = ROWS - 1 - r, COLS - 1 - c
-        return pygame.Rect(BOARD_X + c * SQUARE_SIZE, BOARD_Y + r * SQUARE_SIZE, SQUARE_SIZE, SQUARE_SIZE)
+            r, c = self.gs.rows - 1 - r, self.gs.cols - 1 - c
+        size = self.square_size
+        return pygame.Rect(self.board_x + c * size, self.board_y + r * size, size, size)
 
     def square_at(self, pos):
         """The (row, col) under a screen position, or None if it's off the board"""
-        x, y = pos[0] - BOARD_X, pos[1] - BOARD_Y
-        if 0 <= x < BOARD_WIDTH and 0 <= y < BOARD_HEIGHT:
-            r, c = y // SQUARE_SIZE, x // SQUARE_SIZE
-            return (ROWS - 1 - r, COLS - 1 - c) if self.flipped else (r, c)
+        board = self.board_rect()
+        if board.collidepoint(pos):
+            r, c = (pos[1] - board.y) // self.square_size, (pos[0] - board.x) // self.square_size
+            return (self.gs.rows - 1 - r, self.gs.cols - 1 - c) if self.flipped else (r, c)
         return None
 
     def board_rect(self):
-        return pygame.Rect(BOARD_X, BOARD_Y, BOARD_WIDTH, BOARD_HEIGHT)
+        return pygame.Rect(self.board_x, self.board_y, self.gs.cols * self.square_size,
+                           self.gs.rows * self.square_size)
 
     def promotion_options(self):
         """(rect, move) for each piece in the promotion picker, centered on the board"""
         board = self.board_rect()
-        left = board.centerx - len(self.promotion_choices) * SQUARE_SIZE // 2
-        top = board.centery - SQUARE_SIZE // 2 + 12
-        return [(pygame.Rect(left + i * SQUARE_SIZE, top, SQUARE_SIZE, SQUARE_SIZE), move)
+        left = board.centerx - len(self.promotion_choices) * PICKER_SIZE // 2
+        top = board.centery - PICKER_SIZE // 2 + 12
+        return [(pygame.Rect(left + i * PICKER_SIZE, top, PICKER_SIZE, PICKER_SIZE), move)
                 for i, move in enumerate(self.promotion_choices)]
 
     def hint_button_rect(self):
@@ -536,29 +557,33 @@ class ChessGUI:
     # ---- start menu geometry ----------------------------------------------
 
     def menu_headings(self):
-        """(heading, setting, position) for each group of choices on the start menu"""
+        """(heading, setting, position, button height) for each group of choices on the start menu"""
         left = (WIDTH - MENU_WIDTH) // 2
-        return [(heading, setting, (left, 150 + i * 92))
-                for i, (heading, setting, _) in enumerate(MENU_CHOICES)]
+        headings, top = [], 88
+        for heading, setting, _ in MENU_CHOICES:
+            height = 60 if setting == "variant_key" else 40  # room for a picture of each board
+            headings.append((heading, setting, (left, top), height))
+            top += 24 + height + 14
+        return headings
 
     def menu_buttons(self):
         """(rect, setting, value, label) for every choice button on the start menu"""
         buttons = []
-        for (_, setting, (left, top)), (_, _, choices) in zip(self.menu_headings(), MENU_CHOICES):
+        for (_, setting, (left, top), height), (_, _, choices) in zip(self.menu_headings(), MENU_CHOICES):
             gap = 10
             width = (MENU_WIDTH - gap * (len(choices) - 1)) // len(choices)
             for i, (label, value) in enumerate(choices):
-                rect = pygame.Rect(left + i * (width + gap), top + 24, width, 44)
+                rect = pygame.Rect(left + i * (width + gap), top + 24, width, height)
                 buttons.append((rect, setting, value, label))
         return buttons
 
     def menu_setting_enabled(self, setting):
         # Side and difficulty only matter against the computer
-        return setting == "two_players" or not self.two_players
+        return setting in ("variant_key", "two_players") or not self.two_players
 
     def start_button_rect(self):
-        rect = pygame.Rect(0, 0, 200, 52)
-        rect.center = (WIDTH // 2, 452)
+        rect = pygame.Rect(0, 0, 200, 48)
+        rect.center = (WIDTH // 2, 448)
         return rect
 
     # ---- drawing ----------------------------------------------------------
@@ -583,14 +608,14 @@ class ChessGUI:
 
     def draw_menu(self):
         title = self.title_font.render("Micro Chess", True, TEXT)
-        title_rect = title.get_rect(center=(WIDTH // 2, 70))
-        self.screen.blit(title, title_rect)
-        subtitle = self.small_font.render("Chess on a 4x5 board", True, MUTED_TEXT)
-        self.screen.blit(subtitle, subtitle.get_rect(center=(WIDTH // 2, title_rect.bottom + 14)))
+        self.screen.blit(title, title.get_rect(center=(WIDTH // 2, 48)))
 
-        for heading, setting, position in self.menu_headings():
+        for heading, setting, position, _ in self.menu_headings():
             color = MUTED_TEXT if self.menu_setting_enabled(setting) else DISABLED_TEXT
             self.screen.blit(self.small_font.render(heading.upper(), True, color), position)
+            if setting == "variant_key":  # what the chosen board is like, at the end of the line
+                about = self.small_font.render(VARIANTS[self.variant_key].description, True, MUTED_TEXT)
+                self.screen.blit(about, about.get_rect(topright=(position[0] + MENU_WIDTH, position[1])))
 
         mouse = pygame.mouse.get_pos()
         for rect, setting, value, label in self.menu_buttons():
@@ -604,8 +629,14 @@ class ChessGUI:
             pygame.draw.rect(self.screen, fill, rect, border_radius=10)
             if chosen and not enabled:
                 pygame.draw.rect(self.screen, DISABLED_TEXT, rect, 2, border_radius=10)
-            text = self.font.render(label, True, TEXT if enabled else DISABLED_TEXT)
-            self.screen.blit(text, text.get_rect(center=rect.center))
+            color = TEXT if enabled else DISABLED_TEXT
+            if setting == "variant_key":
+                self.draw_board_icon(VARIANTS[value], (rect.centerx, rect.top + 21))
+                text = self.small_font.render(label, True, color)
+                self.screen.blit(text, text.get_rect(center=(rect.centerx, rect.bottom - 11)))
+            else:
+                text = self.font.render(label, True, color)
+                self.screen.blit(text, text.get_rect(center=rect.center))
 
         button = self.start_button_rect()
         hover = button.collidepoint(mouse)
@@ -613,12 +644,29 @@ class ChessGUI:
         label = self.font.render("Start game", True, TEXT)
         self.screen.blit(label, label.get_rect(center=button.center))
 
+    def draw_board_icon(self, variant, center):
+        """A little picture of a game mode's board: its squares, with the holes left out"""
+        layout = variant.layout
+        width, height = len(layout[0]) * ICON_SQUARE, len(layout) * ICON_SQUARE
+        left, top = center[0] - width // 2, center[1] - height // 2
+        for r, rank in enumerate(layout):
+            for c, square in enumerate(rank):
+                if square != "#":
+                    color = DARK_SQUARE if (r + c) % 2 == (len(layout) - 1) % 2 else LIGHT_SQUARE
+                    self.screen.fill(color, (left + c * ICON_SQUARE, top + r * ICON_SQUARE, ICON_SQUARE, ICON_SQUARE))
+
     def draw_board(self):
-        for r in range(ROWS):
-            for c in range(COLS):
-                # a1 (row 4, column 0) is a dark square
-                color = DARK_SQUARE if (r + c) % 2 == 0 else LIGHT_SQUARE
-                self.screen.fill(color, self.square_rect(r, c))
+        rows, cols = self.gs.rows, self.gs.cols
+        for r in range(rows):
+            for c in range(cols):
+                rect = self.square_rect(r, c)
+                if self.gs.board[r][c] == HOLE:  # a hole looks cut out of the board
+                    self.screen.fill(HOLE_COLOR, rect)
+                    pygame.draw.rect(self.screen, HOLE_EDGE, rect.inflate(-6, -6), 3, border_radius=4)
+                    continue
+                # a1 (bottom left) is a dark square
+                color = DARK_SQUARE if (r + c) % 2 == (rows - 1) % 2 else LIGHT_SQUARE
+                self.screen.fill(color, rect)
 
         if self.last_move:
             for r, c in ((self.last_move.start_row, self.last_move.start_col),
@@ -634,10 +682,10 @@ class ChessGUI:
         # captures stays visible until the piece arrives
         sliding, progress = self.sliding_pieces()
         arriving = {to_square for _, _, to_square in sliding}
-        for r in range(ROWS):
-            for c in range(COLS):
+        for r in range(rows):
+            for c in range(cols):
                 piece = self.animation[0].piece_captured if (r, c) in arriving else self.gs.board[r][c]
-                if piece != EMPTY:
+                if piece not in (EMPTY, HOLE):
                     image = self.images[piece]
                     if (r, c) == self.dragging:  # only a faint copy stays behind
                         image = image.copy()
@@ -683,17 +731,18 @@ class ChessGUI:
         self.screen.blit(image, image.get_rect(center=self.drag_pos))
 
     def draw_coordinates(self):
-        for r in range(ROWS):
-            label = self.small_font.render(str(ROWS - r), True, MUTED_TEXT)
+        board = self.board_rect()
+        for r in range(self.gs.rows):
+            label = self.small_font.render(str(self.gs.rows - r), True, MUTED_TEXT)
             rect = self.square_rect(r, 0)
-            self.screen.blit(label, label.get_rect(center=(BOARD_X // 2, rect.centery)))
-        for c in range(COLS):
+            self.screen.blit(label, label.get_rect(center=(board.x - 18, rect.centery)))
+        for c in range(self.gs.cols):
             label = self.small_font.render(FILES[c], True, MUTED_TEXT)
-            rect = self.square_rect(ROWS - 1, c)
-            self.screen.blit(label, label.get_rect(center=(rect.centerx, BOARD_Y + BOARD_HEIGHT + 16)))
+            rect = self.square_rect(self.gs.rows - 1, c)
+            self.screen.blit(label, label.get_rect(center=(rect.centerx, board.bottom + 16)))
 
     def draw_side_panel(self):
-        area = pygame.Rect(SIDE_PANEL_X, BOARD_Y, SIDE_PANEL_WIDTH, BOARD_HEIGHT)
+        area = pygame.Rect(SIDE_PANEL_X, BOARD_Y, SIDE_PANEL_WIDTH, BOARD_AREA_HEIGHT)
         pygame.draw.rect(self.screen, SIDE_PANEL, area, border_radius=12)
         left = area.x + 14
         self.screen.blit(self.small_font.render("MOVES", True, MUTED_TEXT), (left, area.y + 14))
@@ -752,7 +801,7 @@ class ChessGUI:
             if self.check:
                 text, color = f"{text} - Check!", CHECK_TEXT
             if self.hint:
-                text += f" - hint: {move_notation(self.hint)}"
+                text += f" - hint: {move_notation(self.hint, self.gs.rows)}"
         label = self.font.render(text, True, color)
         self.screen.blit(label, label.get_rect(midleft=(16, bar.centery)))
 
@@ -791,7 +840,7 @@ class ChessGUI:
     def draw_dialog(self, title, detail, buttons):
         """A panel over the dimmed board: a title, a line of text and [(rect, label, fill, hover fill)] buttons"""
         self.dim_board()
-        area = pygame.Rect(0, 0, BOARD_WIDTH - 32, 176)
+        area = pygame.Rect(0, 0, BOARD_AREA_WIDTH - 32, 176)
         area.center = self.board_rect().center
         self.draw_panel(area)
 

@@ -274,10 +274,61 @@ def test_n_goes_back_to_the_menu(app):
     app.draw()
 
 
+@pytest.mark.parametrize("label, key, square_size", [("Micro", "micro", 80), ("Tiny", "tiny", 80),
+                                                     ("Donut", "donut", 64), ("Pillars", "pillars", 64)])
+def test_choosing_a_board_on_the_menu(menu, label, key, square_size):
+    click_menu(menu, label)
+    menu.draw()  # the menu describes the chosen board
+    press(menu, pygame.K_RETURN)
+    assert menu.gs.variant.key == key and menu.square_size == square_size
+    area = pygame.Rect(gui.BOARD_X, gui.BOARD_Y, gui.BOARD_AREA_WIDTH, gui.BOARD_AREA_HEIGHT)
+    assert area.contains(menu.board_rect())
+    for r in range(menu.gs.rows):
+        for c in range(menu.gs.cols):
+            assert menu.square_at(menu.square_rect(r, c).center) == (r, c)
+    menu.draw()
+
+
+def test_moves_on_a_5x5_board_are_named_by_its_ranks(menu):
+    click_menu(menu, "Donut")
+    press(menu, pygame.K_RETURN)
+    rows = menu.gs.rows
+    start, end = menu.square_rect(*square("d2", rows)).center, menu.square_rect(*square("d3", rows)).center
+    click_at(menu, start)
+    click_at(menu, end)
+    assert menu.move_texts == ["d2-d3"]
+
+
+def test_holes_cannot_be_moved_to(menu):
+    click_menu(menu, "Donut")
+    press(menu, pygame.K_RETURN)
+    # The knight on d1 could jump to c3 if it weren't a hole
+    click(menu, "d1")
+    click(menu, "c3")
+    assert menu.move_log == []
+    drag(menu, "d1", "c3")
+    assert menu.move_log == [] and menu.selected == square("d1")  # dropped back where it was
+    menu.draw()
+
+
+def test_bigger_board_flips_for_black(menu):
+    click_menu(menu, "Pillars")
+    click_menu(menu, "Black")
+    press(menu, pygame.K_RETURN)
+    assert menu.flipped
+    for r in range(menu.gs.rows):
+        for c in range(menu.gs.cols):
+            assert menu.square_at(menu.square_rect(r, c).center) == (r, c)
+    menu.update()
+    wait_for_ai(menu)
+    assert len(menu.move_log) == 1
+    menu.draw()
+
+
 def screen_square(app, name):
     """(column, row) of a square on the screen, counted from the top left"""
-    rect = app.square_rect(*square(name))
-    return (rect.x - gui.BOARD_X) // gui.SQUARE_SIZE, (rect.y - gui.BOARD_Y) // gui.SQUARE_SIZE
+    rect, board = app.square_rect(*square(name)), app.board_rect()
+    return (rect.x - board.x) // app.square_size, (rect.y - board.y) // app.square_size
 
 
 def test_board_is_seen_from_whites_side_when_playing_white(app):
@@ -297,8 +348,8 @@ def test_board_flips_when_playing_black_against_the_computer(menu, two_players, 
 def test_clicks_find_the_right_square_when_flipped(menu):
     menu.human_is_white = False
     menu.start_game()
-    for r in range(gui.ROWS):
-        for c in range(gui.COLS):
+    for r in range(menu.gs.rows):
+        for c in range(menu.gs.cols):
             assert menu.square_at(menu.square_rect(r, c).center) == (r, c)
     menu.update()  # the AI plays White's first move
     wait_for_ai(menu)

@@ -3,7 +3,7 @@
 import random
 from functools import lru_cache
 
-from chess_engine import ROWS, COLS, KNIGHT_OFFSETS, ROOK_DIRECTIONS, BISHOP_DIRECTIONS
+from chess_engine import EMPTY, HOLE, KNIGHT_OFFSETS, ROOK_DIRECTIONS, BISHOP_DIRECTIONS
 
 
 # ============================================================================
@@ -81,42 +81,29 @@ MOBILITY_BONUS = {'knight': 4, 'bishop': 4, 'rook': 2}
 KING_ZONE_ATTACK_PENALTY = 10
 
 # How far the game is from the endgame: knights and bishops count 1, rooks 2.
-# The king's table slides from the middlegame one (all 8) to the endgame one (0).
+# The king's table slides from the middlegame one (all the pieces of the starting
+# position still on the board) to the endgame one (none left).
 PHASE_WEIGHTS = {'knight': 1, 'bishop': 1, 'rook': 2}
-MAX_PHASE = 8
 
 
-def on_board(r, c):
-    return 0 <= r < ROWS and 0 <= c < COLS
-
-
-def build_square_scores():
-    """Material plus table bonus for every piece on every square, signed (+ White, - Black).
-
-    Worked out once here so evaluating a position is just a lookup per piece.
-    """
-    scores = {}
-    for kind, table in PIECE_TABLES.items():
-        scores["white_" + kind] = [[PIECE_VALUES[kind] + table[r][c] for c in range(COLS)] for r in range(ROWS)]
-        scores["black_" + kind] = [[-(PIECE_VALUES[kind] + table[ROWS - 1 - r][COLS - 1 - c])
-                                    for c in range(COLS)] for r in range(ROWS)]
-    return scores
-
-
-def build_rays():
+def build_rays(rows, cols, holes):
     """For every square and piece type, the lines of squares it attacks along (nearest first).
 
-    A knight's "lines" are single squares; a rook or bishop stops at the first piece in each line.
+    A knight's "lines" are single squares; a rook or bishop stops at the first piece in each
+    line. Holes are left out, and a line ends at one.
     """
+    def usable(r, c):
+        return 0 <= r < rows and 0 <= c < cols and (r, c) not in holes
+
     rays = {}
-    for r in range(ROWS):
-        for c in range(COLS):
-            rays['knight', r, c] = [[(r + dr, c + dc)] for dr, dc in KNIGHT_OFFSETS if on_board(r + dr, c + dc)]
+    for r in range(rows):
+        for c in range(cols):
+            rays['knight', r, c] = [[(r + dr, c + dc)] for dr, dc in KNIGHT_OFFSETS if usable(r + dr, c + dc)]
             for kind, directions in (('rook', ROOK_DIRECTIONS), ('bishop', BISHOP_DIRECTIONS)):
                 lines = []
                 for dr, dc in directions:
                     line, nr, nc = [], r + dr, c + dc
-                    while on_board(nr, nc):
+                    while usable(nr, nc):
                         line.append((nr, nc))
                         nr, nc = nr + dr, nc + dc
                     if line:
@@ -125,11 +112,75 @@ def build_rays():
     return rays
 
 
-SQUARE_SCORES = build_square_scores()
-RAYS = build_rays()
-# The king's square and the squares around it
-KING_ZONES = {(r, c): {(r + dr, c + dc) for dr in (-1, 0, 1) for dc in (-1, 0, 1) if on_board(r + dr, c + dc)}
-              for r in range(ROWS) for c in range(COLS)}
+def reach_table(reach):
+    """A bonus of 5 points for every square more than average a piece reaches from each square"""
+    squares = [count for row in reach for count in row]
+    average = round(sum(squares) / len(squares))
+    return [[5 * (count - average) for count in row] for row in reach]
+
+
+class EvaluationTables:
+    """Everything evaluate_board looks up for one game mode's board, worked out once.
+
+    Micro Chess uses the hand-made tables above. For other boards they are made from
+    the board's shape: knights, bishops and (in the endgame) the king prefer squares
+    from which they reach more of the board, so the center counts, and squares next
+    to holes or edges count less.
+    """
+
+    def __init__(self, variant):
+        board = variant.start_board()
+        rows, cols = len(board), len(board[0])
+        holes = {(r, c) for r in range(rows) for c in range(cols) if board[r][c] == HOLE}
+        self.rays = build_rays(rows, cols, holes)
+        # The king's square and the squares around it
+        self.king_zones = {(r, c): {(r + dr, c + dc) for dr in (-1, 0, 1) for dc in (-1, 0, 1)
+                                    if 0 <= r + dr < rows and 0 <= c + dc < cols and (r + dr, c + dc) not in holes}
+                           for r in range(rows) for c in range(cols)}
+
+        if variant.key == "micro":
+            tables = PIECE_TABLES
+            self.king_middlegame, self.king_endgame = KING_MIDDLEGAME_TABLE, KING_ENDGAME_TABLE
+        else:
+            def reach(kind):
+                return [[sum(len(line) for line in self.rays[kind, r, c]) for c in range(cols)] for r in range(rows)]
+            tables = {
+                'pawn': [[30 if r == 1 else 10 if r == 2 else 0 for c in range(cols)] for r in range(rows)],
+                'knight': reach_table(reach('knight')),
+                'bishop': reach_table(reach('bishop')),
+                'rook': [[10 if r == 1 else 0 for c in range(cols)] for r in range(rows)],
+            }
+            # Stay at home while there are pieces about (-10 for every rank forward), then centralize
+            self.king_middlegame = [[max(-30, 10 - 10 * (rows - 1 - r)) for c in range(cols)] for r in range(rows)]
+            self.king_endgame = reach_table([[len(self.king_zones[r, c]) - 1 for c in range(cols)]
+                                             for r in range(rows)])
+
+        # Material plus table bonus for every piece on every square, signed (+ White, - Black),
+        # so evaluating a position is just a lookup per piece. Black uses the table turned around.
+        self.square_scores = {}
+        for kind, table in tables.items():
+            self.square_scores["white_" + kind] = [[PIECE_VALUES[kind] + table[r][c] for c in range(cols)]
+                                                   for r in range(rows)]
+            self.square_scores["black_" + kind] = [[-(PIECE_VALUES[kind] + table[rows - 1 - r][cols - 1 - c])
+                                                    for c in range(cols)] for r in range(rows)]
+        self.max_phase = max(1, sum(PHASE_WEIGHTS.get(piece.split("_")[1], 0)
+                                    for row in board for piece in row if piece not in (EMPTY, HOLE)))
+
+    def king_square_score(self, table_row, table_col, phase):
+        """The king's table bonus, blended between middlegame and endgame by the game phase"""
+        middlegame = self.king_middlegame[table_row][table_col]
+        endgame = self.king_endgame[table_row][table_col]
+        return (middlegame * phase + endgame * (self.max_phase - phase)) // self.max_phase
+
+
+EVALUATION_TABLES = {}  # game mode key -> EvaluationTables
+
+
+def tables_for(game_state):
+    variant = game_state.variant
+    if variant.key not in EVALUATION_TABLES:
+        EVALUATION_TABLES[variant.key] = EvaluationTables(variant)
+    return EVALUATION_TABLES[variant.key]
 
 
 @lru_cache(maxsize=1000)
@@ -140,13 +191,6 @@ def get_piece_value(piece):
     return PIECE_VALUES.get(piece.split('_')[1], 0)
 
 
-def king_square_score(table_row, table_col, phase):
-    """The king's table bonus, blended between middlegame and endgame by the game phase"""
-    middlegame = KING_MIDDLEGAME_TABLE[table_row][table_col]
-    endgame = KING_ENDGAME_TABLE[table_row][table_col]
-    return (middlegame * phase + endgame * (MAX_PHASE - phase)) // MAX_PHASE
-
-
 def evaluate_board(game_state):
     """Evaluate board position: Positive = good for White, Negative = good for Black.
 
@@ -155,17 +199,19 @@ def evaluate_board(game_state):
     - mobility: a small bonus for each square a knight, bishop or rook can move to
     - king safety: a penalty for each enemy attack on the squares around the king
     """
+    tables = tables_for(game_state)
     board = game_state.board
-    zones = {"white": KING_ZONES[game_state.white_king_location],
-             "black": KING_ZONES[game_state.black_king_location]}
+    rows, cols = game_state.rows, game_state.cols
+    zones = {"white": tables.king_zones[game_state.white_king_location],
+             "black": tables.king_zones[game_state.black_king_location]}
     score = 0
     phase = 0
-    for r in range(ROWS):
-        for c in range(COLS):
+    for r in range(rows):
+        for c in range(cols):
             piece = board[r][c]
-            if piece == "--" or piece.endswith("king"):
+            if piece == EMPTY or piece == HOLE or piece.endswith("king"):
                 continue
-            score += SQUARE_SCORES[piece][r][c]
+            score += tables.square_scores[piece][r][c]
             color, kind = piece.split("_")
             if kind == "pawn":
                 continue
@@ -173,7 +219,7 @@ def evaluate_board(game_state):
 
             enemy_zone = zones["black" if color == "white" else "white"]
             reachable = zone_attacks = 0
-            for line in RAYS[kind, r, c]:
+            for line in tables.rays[kind, r, c]:
                 for square in line:
                     if square in enemy_zone:
                         zone_attacks += 1
@@ -188,11 +234,11 @@ def evaluate_board(game_state):
             bonus = MOBILITY_BONUS[kind] * reachable + KING_ZONE_ATTACK_PENALTY * zone_attacks
             score += bonus if color == "white" else -bonus
 
-    phase = min(phase, MAX_PHASE)  # a promoted pawn can push it past the start
+    phase = min(phase, tables.max_phase)  # a promoted pawn can push it past the start
     wr, wc = game_state.white_king_location
     br, bc = game_state.black_king_location
-    score += king_square_score(wr, wc, phase)
-    score -= king_square_score(ROWS - 1 - br, COLS - 1 - bc, phase)
+    score += tables.king_square_score(wr, wc, phase)
+    score -= tables.king_square_score(rows - 1 - br, cols - 1 - bc, phase)
     return score
 
 

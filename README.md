@@ -45,9 +45,52 @@ The pieces move as in ordinary chess, with these differences:
   bishops that all stand on squares of the same color. None of these can ever reach checkmate on
   this board.
 
+## Game modes
+
+Besides the classic 4×5 board, there are three more small boards to choose from on the start menu.
+They follow the rules above, except that there's no castling. The starting positions were picked
+by having the computer play hundreds of games on candidate setups and keeping ones where White
+and Black win about equally often.
+
+**Tiny** (4×4): the quickest games. The pawns meet on the first move.
+
+```
+    a   b   c   d
+  +---+---+---+---+
+4 | k | b | r | n |
+  +---+---+---+---+
+3 |   | p |   |   |
+  +---+---+---+---+
+2 |   |   | P |   |
+  +---+---+---+---+
+1 | N | R | B | K |
+  +---+---+---+---+
+```
+
+**Donut** (5×5) and **Pillars** (5×5) have holes in the board, marked `#`. No piece can stand on a
+hole, and rooks, bishops and pawns can't move across one, but knights jump over holes as usual.
+Holes also block check, and a hole next to a king takes away an escape square.
+
+```
+Donut                              Pillars
+    a   b   c   d   e                  a   b   c   d   e
+  +---+---+---+---+---+              +---+---+---+---+---+
+5 | r | n |   | b | k |            5 | k |   | n | r | b |
+  +---+---+---+---+---+              +---+---+---+---+---+
+4 | p | p |   |   |   |            4 | p |   |   |   | p |
+  +---+---+---+---+---+              +---+---+---+---+---+
+3 |   |   | # |   |   |            3 |   | # |   | # |   |
+  +---+---+---+---+---+              +---+---+---+---+---+
+2 |   |   |   | P | P |            2 | P |   |   |   | P |
+  +---+---+---+---+---+              +---+---+---+---+---+
+1 | K | B |   | N | R |            1 | B | R | N |   | K |
+  +---+---+---+---+---+              +---+---+---+---+---+
+```
+
 ## Features
 
 - A pygame interface: click or drag the pieces, with each piece's legal moves marked
+- Four boards: the classic 4×5, a 4×4, and two 5×5 boards with holes in them
 - Hints: press H (or the Hint button) and an arrow shows the best move the AI can find
 - Play against the computer as White or Black (the board turns around when you play Black), at
   Easy, Medium or Hard, or play a friend on the same computer
@@ -56,7 +99,7 @@ The pieces move as in ordinary chess, with these differences:
 - Sliding piece animations, and move and capture sounds generated in code (no sound files)
 - Undo, restart, and a game-over screen with **Play again**
 - The computer thinks in a background thread, so the window never freezes
-- A terminal version that needs nothing but Python
+- A terminal version that needs nothing but Python, with all four boards
 - A pytest test suite, including GUI tests that run without opening a window
 
 ## Installing and running
@@ -85,8 +128,8 @@ python3 play_terminal.py
 
 ## Controls
 
-On the start menu, choose your opponent (**Computer** or **2 Players**), your color and the
-difficulty, then click **Start game** or press Enter.
+On the start menu, choose the board, your opponent (**Computer** or **2 Players**), your color
+and the difficulty, then click **Start game** or press Enter.
 
 | Action | Control |
 | --- | --- |
@@ -125,7 +168,9 @@ At the end of each line it scores the position (positive is good for White) by a
 - **Material:** pawn 100, knight and bishop 300, rook 500
 - **Piece-square tables** for the 4×5 board: knights and bishops prefer the center, pawns gain value
   as they advance, and the king stays tucked in its corner while there are pieces around to attack
-  it, then heads for the center in the endgame
+  it, then heads for the center in the endgame. On the other boards these tables are worked out
+  from the board's shape, so squares next to a hole or an edge, where a piece reaches less, count
+  for less
 - **Mobility:** a small bonus for every square a knight, bishop or rook can move to
 - **King safety:** a penalty for every enemy attack on the squares around the king
 
@@ -159,7 +204,7 @@ Mirco-Chess/
 ├── gui.py                # pygame interface: menu, board, side panel, drag-and-drop, hints
 ├── sounds.py             # move and capture sounds, generated in code
 ├── play_terminal.py      # the terminal version
-├── chess_engine.py       # the rules: moves, castling, promotion, check, checkmate and draws
+├── chess_engine.py       # the rules and the boards: moves, castling, promotion, check, checkmate and draws
 ├── ai.py                 # the computer player: minimax with alpha-beta pruning
 ├── images/               # piece images (60×60 PNG)
 ├── docs/screenshot.png   # the screenshot at the top of this page
