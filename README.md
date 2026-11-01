@@ -100,7 +100,7 @@ difficulty, then click **Start game** or press Enter.
 | Restart | **R** |
 | Back to the menu | **N** |
 | Sound on/off | **M** |
-| Quit | **Esc** |
+| Quit | **Esc** (once a game has started, it asks first: **Enter** quits, **Esc** keeps playing) |
 
 In the terminal version, type a move as two squares, such as `d2 d3`. To castle, type the king's
 move (`d1 b1` or `a5 c5`). Type `quit` to leave.

@@ -178,8 +178,60 @@ def test_restart_and_quit_keys(app):
     click(app, "a4")
     press(app, pygame.K_r)
     assert app.move_log == [] and not app.ai_thinking
-    press(app, pygame.K_ESCAPE)
+    press(app, pygame.K_ESCAPE)  # no move played yet, so nothing to lose
     assert not app.running
+
+
+def test_esc_asks_before_quitting_a_game_in_progress(app):
+    click(app, "a1")
+    click(app, "a4")
+    press(app, pygame.K_ESCAPE)
+    assert app.confirming_quit and app.running
+    app.draw()
+    press(app, pygame.K_ESCAPE)  # Esc again keeps playing
+    assert not app.confirming_quit and app.running
+    press(app, pygame.K_ESCAPE)
+    press(app, pygame.K_RETURN)
+    assert not app.running
+
+
+def test_quit_dialog_buttons(app):
+    click(app, "a1")
+    click(app, "a4")
+    press(app, pygame.K_ESCAPE)
+    click_at(app, app.keep_playing_rect().center)
+    assert not app.confirming_quit and app.running
+    press(app, pygame.K_ESCAPE)
+    click_at(app, app.quit_rect().center)
+    assert not app.running
+
+
+def test_the_board_ignores_input_while_the_quit_dialog_is_open(app):
+    click(app, "a1")
+    click(app, "a4")
+    app.update()
+    wait_for_ai(app)
+    press(app, pygame.K_ESCAPE)
+    press(app, pygame.K_u)
+    press(app, pygame.K_r)
+    click(app, "d1")
+    assert len(app.move_log) == 2 and app.selected is None and app.confirming_quit
+
+
+def test_esc_quits_at_once_from_the_menu(menu):
+    press(menu, pygame.K_ESCAPE)
+    assert not menu.running
+
+
+def test_esc_quits_at_once_after_the_game(app):
+    # Pawn to c5 as a rook is checkmate
+    load(app, position({"a5": "black_king", "b3": "white_king", "c4": "white_pawn"}))
+    click(app, "c4")
+    click(app, "c5")
+    click_at(app, app.promotion_options()[0][0].center)
+    assert app.result == "checkmate"
+    press(app, pygame.K_ESCAPE)
+    assert not app.running and not app.confirming_quit
 
 
 def test_starts_on_the_menu(menu):

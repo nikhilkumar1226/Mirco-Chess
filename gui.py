@@ -170,6 +170,7 @@ class ChessGUI:
         self.search_results = queue.Queue()  # (search id, "ai" or "hint", move) from search threads
         self.search_id = 0
         self.running = True
+        self.confirming_quit = False  # the "Quit the game?" dialog is open
         self.in_menu = True
         self.new_game()
 
@@ -363,9 +364,11 @@ class ChessGUI:
     def handle_event(self, event):
         if event.type == pygame.QUIT:
             self.running = False
+        elif self.confirming_quit:
+            self.handle_quit_dialog(event)
         elif event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
-                self.running = False
+                self.ask_to_quit()
             elif event.key == pygame.K_m:
                 self.sounds.toggle_mute()
             elif self.in_menu:
@@ -388,6 +391,27 @@ class ChessGUI:
             self.drag_pos = event.pos
         elif event.type == pygame.MOUSEBUTTONUP and event.button == 1 and self.dragging:
             self.drop(event.pos)
+
+    def ask_to_quit(self):
+        """Esc: quit at once if there's no game to lose, otherwise ask first"""
+        if self.in_menu or self.result is not None or not self.move_log:
+            self.running = False
+        else:
+            self.confirming_quit = True
+            self.dragging = None  # a piece being dragged goes back to its square
+
+    def handle_quit_dialog(self, event):
+        """While "Quit the game?" is open, only its answers count"""
+        if event.type == pygame.KEYDOWN:
+            if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_y):
+                self.running = False
+            elif event.key in (pygame.K_ESCAPE, pygame.K_n):
+                self.confirming_quit = False
+        elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if self.quit_rect().collidepoint(event.pos):
+                self.running = False
+            elif self.keep_playing_rect().collidepoint(event.pos):
+                self.confirming_quit = False
 
     def handle_menu_click(self, pos):
         for rect, setting, value, _ in self.menu_buttons():
@@ -498,6 +522,17 @@ class ChessGUI:
         rect.midleft = (self.board_rect().centerx + 6, self.board_rect().centery + 40)
         return rect
 
+    def keep_playing_rect(self):
+        """The buttons of the "Quit the game?" dialog: Keep playing (140 wide) and Quit (100 wide)"""
+        rect = pygame.Rect(0, 0, 140, 44)
+        rect.midleft = (self.board_rect().centerx - 126, self.board_rect().centery + 40)
+        return rect
+
+    def quit_rect(self):
+        rect = pygame.Rect(0, 0, 100, 44)
+        rect.midleft = (self.keep_playing_rect().right + 12, self.board_rect().centery + 40)
+        return rect
+
     # ---- start menu geometry ----------------------------------------------
 
     def menu_headings(self):
@@ -543,6 +578,8 @@ class ChessGUI:
             self.draw_promotion_picker()
         if self.result is not None:
             self.draw_game_over()
+        if self.confirming_quit:
+            self.draw_quit_dialog()
 
     def draw_menu(self):
         title = self.title_font.render("Micro Chess", True, TEXT)
@@ -751,25 +788,34 @@ class ChessGUI:
             image = self.images[f"{color}_{move.promotion_piece}"]
             self.screen.blit(image, image.get_rect(center=rect.center))
 
-    def draw_game_over(self):
+    def draw_dialog(self, title, detail, buttons):
+        """A panel over the dimmed board: a title, a line of text and [(rect, label, fill, hover fill)] buttons"""
         self.dim_board()
-        board = self.board_rect()
         area = pygame.Rect(0, 0, BOARD_WIDTH - 32, 176)
-        area.center = board.center
+        area.center = self.board_rect().center
         self.draw_panel(area)
 
-        title, detail = game_over_text(self.result, self.gs.white_to_move)
         title_label = self.big_font.render(title, True, DARK_TEXT)
         self.screen.blit(title_label, title_label.get_rect(center=(area.centerx, area.top + 36)))
         detail_label = self.font.render(detail, True, DARK_TEXT)
         self.screen.blit(detail_label, detail_label.get_rect(center=(area.centerx, area.top + 72)))
 
         mouse = pygame.mouse.get_pos()
-        for button, text in ((self.play_again_rect(), "Play again"), (self.menu_button_rect(), "Menu")):
-            hover = button.collidepoint(mouse)
-            pygame.draw.rect(self.screen, BUTTON_HOVER if hover else BUTTON, button, border_radius=10)
+        for button, text, fill, hover_fill in buttons:
+            pygame.draw.rect(self.screen, hover_fill if button.collidepoint(mouse) else fill, button,
+                             border_radius=10)
             label = self.font.render(text, True, TEXT)
             self.screen.blit(label, label.get_rect(center=button.center))
+
+    def draw_game_over(self):
+        title, detail = game_over_text(self.result, self.gs.white_to_move)
+        self.draw_dialog(title, detail, [(self.play_again_rect(), "Play again", BUTTON, BUTTON_HOVER),
+                                         (self.menu_button_rect(), "Menu", BUTTON, BUTTON_HOVER)])
+
+    def draw_quit_dialog(self):
+        self.draw_dialog("Quit the game?", "This game will be lost",
+                         [(self.keep_playing_rect(), "Keep playing", BUTTON, BUTTON_HOVER),
+                          (self.quit_rect(), "Quit", CHOICE, CHOICE_HOVER)])
 
     # ---- main loop --------------------------------------------------------
 
