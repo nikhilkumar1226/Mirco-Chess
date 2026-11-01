@@ -40,7 +40,10 @@ The pieces move as in ordinary chess, with these differences:
   crossed. For White that is king d1→b1 and rook a1→c1; for Black, king a5→c5 and rook d5→b5. It's
   allowed only if neither the king nor that rook has moved, the squares between them are empty, and
   the king isn't in check and doesn't pass through or land on an attacked square.
-- **Draws:** stalemate, threefold repetition, or only the two kings left on the board.
+- **Draws:** stalemate, threefold repetition, or insufficient material: neither side has the pieces
+  to checkmate. That's the two kings alone, a king and knight against a king, or kings with only
+  bishops that all stand on squares of the same color. None of these can ever reach checkmate on
+  this board.
 
 ## Features
 
@@ -131,7 +134,7 @@ A few more details:
 - Captures and promotions are searched first, which lets alpha-beta prune much more.
 - A checkmate scores far above anything else, and a sooner mate scores higher, so it takes the
   quickest win and puts off a loss as long as it can.
-- Draws by stalemate, repetition or bare kings score 0.
+- Draws by stalemate, repetition or insufficient material score 0.
 - When several moves score exactly the same, it picks one of them at random.
 
 Hard usually answers in well under a second.

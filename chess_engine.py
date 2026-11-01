@@ -76,7 +76,7 @@ class GameState:
         "checkmate"             - the side to move is in check and has no legal moves (it lost)
         "stalemate"             - the side to move is not in check but has no legal moves (draw)
         "repetition"            - the same position has appeared three times (draw)
-        "insufficient_material" - only the two kings are left (draw)
+        "insufficient_material" - neither side has the pieces left to checkmate (draw)
         """
         if not self.get_valid_moves():
             return "checkmate" if self.in_check() else "stalemate"
@@ -91,8 +91,27 @@ class GameState:
         return self.position_history.count(self.position_history[-1]) >= 3
 
     def is_insufficient_material(self):
-        """True if only the two kings are left on the board"""
-        return all(piece == EMPTY or piece.endswith("king") for row in self.board for piece in row)
+        """True if neither side has the pieces to checkmate, however the game goes on.
+
+        That's when the kings are left with at most one knight, or with only bishops
+        that all stand on squares of the same color (a bishop never changes color).
+        No checkmate exists with these pieces on a 4x5 board.
+        """
+        knights = 0
+        bishop_colors = set()
+        for r, row in enumerate(self.board):
+            for c, piece in enumerate(row):
+                if piece == EMPTY or piece.endswith("king"):
+                    continue
+                if piece.endswith("knight"):
+                    knights += 1
+                elif piece.endswith("bishop"):
+                    bishop_colors.add((r + c) % 2)
+                else:
+                    return False  # a pawn or a rook can still lead to checkmate
+        if knights:
+            return knights == 1 and not bishop_colors
+        return len(bishop_colors) <= 1
 
     def get_all_possible_moves(self):
         """Moves that follow how each piece moves, without checking if the king is left in check."""
@@ -328,3 +347,4 @@ class Move:
     def __eq__(self, other):
         return (self.start_row, self.start_col, self.end_row, self.end_col, self.promotion_piece) == \
                (other.start_row, other.start_col, other.end_row, other.end_col, other.promotion_piece)
+ 

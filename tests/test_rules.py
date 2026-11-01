@@ -1,6 +1,9 @@
+import itertools
 import random
 
-from chess_engine import GameState
+import pytest
+
+from chess_engine import GameState, ROWS, COLS, EMPTY
 from ai import get_ai_move
 from helpers import position, square, find_move
 
@@ -120,3 +123,42 @@ def test_only_kings_left_is_a_draw():
 def test_king_and_pawn_is_not_a_draw():
     gs = position({"a5": "black_king", "d1": "white_king", "d2": "white_pawn"})
     assert gs.get_game_result() is None
+
+
+@pytest.mark.parametrize("pieces", [
+    {"c3": "white_knight"},
+    {"b2": "black_knight"},
+    {"c3": "white_bishop"},
+    {"c3": "white_bishop", "b4": "black_bishop"},  # both on light squares
+    {"a1": "white_bishop", "c3": "white_bishop"},  # two bishops on dark squares
+])
+def test_no_mating_material_is_a_draw(pieces):
+    gs = position({"a5": "black_king", "d1": "white_king", **pieces})
+    assert gs.get_game_result() == "insufficient_material"
+
+
+@pytest.mark.parametrize("pieces", [
+    {"c3": "white_rook"},
+    {"c3": "white_bishop", "c4": "black_bishop"},  # bishops on opposite colors
+    {"c3": "white_knight", "b3": "black_knight"},
+    {"c3": "white_bishop", "b3": "black_knight"},
+    {"c3": "white_knight", "b3": "white_knight"},
+])
+def test_pieces_that_can_still_mate_are_not_a_draw(pieces):
+    gs = position({"a5": "black_king", "d1": "white_king", **pieces})
+    assert gs.get_game_result() is None
+
+
+@pytest.mark.parametrize("piece", ["white_knight", "white_bishop"])
+def test_a_lone_knight_or_bishop_can_never_checkmate(piece):
+    # Try every placement of the two kings and the piece, with either side to move
+    squares = [(r, c) for r in range(ROWS) for c in range(COLS)]
+    for placement in itertools.permutations(squares, 3):
+        board = [[EMPTY] * COLS for _ in range(ROWS)]
+        for (r, c), name in zip(placement, ["white_king", "black_king", piece]):
+            board[r][c] = name
+        for white_to_move in (True, False):
+            gs = GameState(board, white_to_move)
+            if gs.is_king_attacked(white=not white_to_move):
+                continue  # impossible: the side that just moved left its king in check
+            assert not (gs.in_check() and not gs.get_valid_moves())

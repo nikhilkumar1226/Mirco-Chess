@@ -83,7 +83,7 @@ def game_over_message(gs, result):
         return "Stalemate! It's a draw."
     if result == "repetition":
         return "Draw by threefold repetition."
-    return "Draw - only the two kings are left."
+    return "Draw - neither side has the pieces left to checkmate."
 
 def ask_choice(question, choices, default):
     """Ask until the answer is one of the choices' first letters (Enter picks the default)"""

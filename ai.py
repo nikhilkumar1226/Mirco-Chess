@@ -238,7 +238,7 @@ def minimax_alpha_beta(game_state, depth, alpha, beta, maximizing_player, ply=1)
     Returns:
         Best evaluation score for current position
     """
-    # Draws by repetition or bare kings
+    # Draws by repetition or insufficient material
     if game_state.is_threefold_repetition() or game_state.is_insufficient_material():
         return 0
 
