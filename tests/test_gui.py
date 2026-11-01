@@ -8,13 +8,16 @@ os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
 pygame = pytest.importorskip("pygame")
 
 import gui  # noqa: E402  (needs the environment variables above)
+import settings  # noqa: E402
 from helpers import position, square, find_move  # noqa: E402
 
 
 @pytest.fixture
-def menu(monkeypatch):
+def menu(monkeypatch, tmp_path):
     # Moves appear at once, so tests don't have to wait for pieces to slide
     monkeypatch.setattr(gui, "ANIMATION_MS", 0)
+    # Settings are saved in a temporary folder, never the real home folder
+    monkeypatch.setattr(settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
     app = gui.ChessGUI()
     yield app
     pygame.quit()
@@ -453,6 +456,98 @@ def test_m_toggles_sound(app):
     app.draw()
     press(app, pygame.K_m)
     assert not app.sounds.muted
+
+
+def switch(app, name):
+    """Flip one of the switches on the settings screen by clicking its row"""
+    click_at(app, next(rect for rect, setting in app.settings_rows() if setting == name).center)
+
+
+def test_settings_screen_opens_from_the_menu_and_the_game(menu):
+    click_at(menu, menu.menu_settings_rect().center)
+    assert menu.in_settings
+    menu.draw()
+    press(menu, pygame.K_ESCAPE)  # back to the menu, not out of the game
+    assert not menu.in_settings and menu.in_menu and menu.running
+
+    press(menu, pygame.K_RETURN)
+    click_at(menu, menu.gear_button_rect().center)
+    assert menu.in_settings
+    click_at(menu, menu.done_button_rect().center)
+    assert not menu.in_settings and not menu.in_menu
+    press(menu, pygame.K_s)
+    assert menu.in_settings
+
+
+def test_switches_are_remembered_next_time(menu):
+    menu.open_settings()
+    switch(menu, "sound")
+    assert not menu.settings["sound"] and menu.sounds.muted
+    assert not gui.ChessGUI().settings["sound"]
+
+
+def test_menu_choices_are_remembered_next_time(menu):
+    for label in ("Donut", "Black", "Hard"):
+        click_menu(menu, label)
+    press(menu, pygame.K_RETURN)
+    again = gui.ChessGUI()
+    assert again.in_menu
+    assert (again.variant_key, again.human_is_white, again.difficulty) == ("donut", False, "hard")
+
+
+def test_hints_switched_off(app):
+    app.open_settings()
+    switch(app, "hints")
+    press(app, pygame.K_ESCAPE)
+    press(app, pygame.K_h)
+    click_at(app, app.hint_button_rect().center)
+    assert not app.hint_thinking and not app.can_ask_for_hint()
+    app.draw()
+
+
+def test_switching_hints_off_clears_the_hint(app):
+    press(app, pygame.K_h)
+    wait_for_ai(app)
+    assert app.hint is not None
+    app.toggle_setting("hints")
+    assert app.hint is None
+
+
+def test_animations_switched_off(app, monkeypatch):
+    monkeypatch.setattr(gui, "ANIMATION_MS", 10_000)
+    app.toggle_setting("animations")
+    click(app, "a1")
+    click(app, "a4")
+    assert app.animation is None
+
+
+def test_move_dots_switched_off(app):
+    click(app, "d1")  # the king can step to c2
+    target = app.square_rect(*square("c2")).center
+    app.draw()
+    with_dots = app.screen.get_at(target)
+    app.toggle_setting("show_moves")
+    app.draw()
+    assert app.screen.get_at(target) != with_dots
+    assert app.screen.get_at(target) in (gui.DARK_SQUARE, gui.LIGHT_SQUARE)
+
+
+def test_coordinates_switched_off(app):
+    board = app.board_rect()
+    margin = pygame.Rect(0, board.y, board.x, board.height)  # where the rank numbers go
+    app.draw()
+    assert pygame.transform.average_color(app.screen, margin)[:3] != tuple(gui.BACKGROUND)[:3]
+    app.toggle_setting("coordinates")
+    app.draw()
+    assert pygame.transform.average_color(app.screen, margin)[:3] == tuple(gui.BACKGROUND)[:3]
+
+
+def test_quitting_without_being_asked(app):
+    app.toggle_setting("confirm_quit")
+    click(app, "a1")
+    click(app, "a4")
+    press(app, pygame.K_ESCAPE)
+    assert not app.running and not app.confirming_quit
 
 
 def test_drag_a_piece_to_move_it(app, monkeypatch):

@@ -97,6 +97,9 @@ Donut                              Pillars
 - Highlights for the last move and for a king in check, plus a picker for pawn promotion
 - A side panel with the move list and the captured pieces
 - Sliding piece animations, and move and capture sounds generated in code (no sound files)
+- A settings screen where you switch the extras on or off: sound, the legal-move dots, animations,
+  the Hint button, board coordinates and the "Quit the game?" question. Your settings and your last
+  choices on the start menu are remembered between launches
 - Undo, restart, and a game-over screen with **Play again**
 - The computer thinks in a background thread, so the window never freezes
 - A terminal version that needs nothing but Python, with all four boards
@@ -142,8 +145,12 @@ and the difficulty, then click **Start game** or press Enter.
 | Undo | **U**: takes back your move and the computer's reply (one move in a 2-player game) |
 | Restart | **R** |
 | Back to the menu | **N** |
-| Sound on/off | **M** |
+| Settings | **S**, the cog button above the move list, or **Settings** on the start menu |
+| Sound on/off | **M** (or in Settings) |
 | Quit | **Esc** (once a game has started, it asks first: **Enter** quits, **Esc** keeps playing) |
+
+The settings are saved in a small file, `.micro_chess.json`, in your home folder. Delete it to go
+back to the defaults.
 
 In the terminal version, type a move as two squares, such as `d2 d3`. To castle, type the king's
 move (`d1 b1` or `a5 c5`). Type `quit` to leave.
@@ -203,6 +210,7 @@ Mirco-Chess/
 ├── main.py               # starts the pygame game
 ├── gui.py                # pygame interface: menu, board, side panel, drag-and-drop, hints
 ├── sounds.py             # move and capture sounds, generated in code
+├── settings.py           # loads and saves the settings
 ├── play_terminal.py      # the terminal version
 ├── chess_engine.py       # the rules and the boards: moves, castling, promotion, check, checkmate and draws
 ├── ai.py                 # the computer player: minimax with alpha-beta pruning

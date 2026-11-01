@@ -12,6 +12,7 @@ import traceback
 
 import pygame
 
+import settings
 from ai import get_ai_move
 from chess_engine import GameState, ROWS, EMPTY, HOLE, VARIANTS
 from sounds import Sounds
@@ -72,6 +73,18 @@ MENU_CHOICES = [
 ]
 MENU_WIDTH = 400
 ICON_SQUARE = 6  # the size of a square in the little pictures of the boards on the menu
+MENU_SETTINGS = ("variant_key", "two_players", "human_is_white", "difficulty")  # remembered for next time
+
+# The settings screen: (label, setting) for each on/off switch
+SETTING_SWITCHES = [
+    ("Sound effects", "sound"),
+    ("Show where a piece can move", "show_moves"),
+    ("Animations", "animations"),
+    ("Hint button", "hints"),
+    ("Board coordinates", "coordinates"),
+    ("Ask before quitting a game", "confirm_quit"),
+]
+SETTINGS_ROW_HEIGHT = 40
 
 HINT_DIFFICULTY = "hard"  # hints come from the strongest search
 
@@ -159,16 +172,17 @@ class ChessGUI:
         self.big_font = pygame.font.Font(None, 44)
         self.title_font = pygame.font.Font(None, 64)
 
-        # Settings chosen on the start menu
-        self.variant_key = "micro"
-        self.two_players = False
-        self.human_is_white = True
-        self.difficulty = "medium"
+        # The settings from last time, including what was chosen on the start menu
+        self.settings = settings.load()
+        for name in MENU_SETTINGS:
+            setattr(self, name, self.settings[name])
+        self.sounds.muted = not self.settings["sound"]
 
         self.search_results = queue.Queue()  # (search id, "ai" or "hint", move) from search threads
         self.search_id = 0
         self.running = True
         self.confirming_quit = False  # the "Quit the game?" dialog is open
+        self.in_settings = False  # the settings screen is open (over the menu or the game)
         self.in_menu = True
         self.new_game()
 
@@ -177,7 +191,26 @@ class ChessGUI:
     def start_game(self):
         """Leave the start menu and play with the chosen settings"""
         self.in_menu = False
+        self.save_settings()
         self.new_game()
+
+    def save_settings(self):
+        """Remember the settings, and what was chosen on the start menu, for next time"""
+        for name in MENU_SETTINGS:
+            self.settings[name] = getattr(self, name)
+        settings.save(self.settings)
+
+    def open_settings(self):
+        self.in_settings = True
+        self.dragging = None  # a piece being dragged goes back to its square
+
+    def toggle_setting(self, name):
+        self.settings[name] = not self.settings[name]
+        self.sounds.muted = not self.settings["sound"]
+        if name == "hints" and (self.hint or self.hint_thinking):
+            self.hint = None
+            self.cancel_search()  # forget the hint being worked out (the AI restarts if it was thinking)
+        self.save_settings()
 
     def open_menu(self):
         self.in_menu = True
@@ -230,6 +263,7 @@ class ChessGUI:
 
     def play(self, move, animate=True):
         self.gs.make_move(move)
+        animate = animate and self.settings["animations"]
         self.animation = (move, pygame.time.get_ticks()) if animate else None
         self.sounds.play("capture" if move.piece_captured != EMPTY else "move")
         self.move_log.append(move)
@@ -328,7 +362,7 @@ class ChessGUI:
         self.hint_thinking = False
 
     def can_ask_for_hint(self):
-        return (not self.in_menu and self.result is None and self.is_human_turn()
+        return (self.settings["hints"] and not self.in_menu and self.result is None and self.is_human_turn()
                 and not self.ai_thinking and not self.hint_thinking and self.hint is None
                 and not self.promotion_choices)
 
@@ -385,11 +419,15 @@ class ChessGUI:
             self.running = False
         elif self.confirming_quit:
             self.handle_quit_dialog(event)
+        elif self.in_settings:
+            self.handle_settings_event(event)
         elif event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
                 self.ask_to_quit()
             elif event.key == pygame.K_m:
-                self.sounds.toggle_mute()
+                self.toggle_setting("sound")
+            elif event.key == pygame.K_s:
+                self.open_settings()
             elif self.in_menu:
                 if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
                     self.start_game()
@@ -412,8 +450,8 @@ class ChessGUI:
             self.drop(event.pos)
 
     def ask_to_quit(self):
-        """Esc: quit at once if there's no game to lose, otherwise ask first"""
-        if self.in_menu or self.result is not None or not self.move_log:
+        """Esc: quit at once if there's no game to lose (or the player said not to ask), otherwise ask first"""
+        if self.in_menu or self.result is not None or not self.move_log or not self.settings["confirm_quit"]:
             self.running = False
         else:
             self.confirming_quit = True
@@ -432,14 +470,32 @@ class ChessGUI:
             elif self.keep_playing_rect().collidepoint(event.pos):
                 self.confirming_quit = False
 
+    def handle_settings_event(self, event):
+        """On the settings screen, clicks flip the switches; Done, Esc, Enter or S go back"""
+        if event.type == pygame.KEYDOWN:
+            if event.key in (pygame.K_ESCAPE, pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_s):
+                self.in_settings = False
+        elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            for rect, name in self.settings_rows():
+                if rect.collidepoint(event.pos):
+                    self.toggle_setting(name)
+            if self.done_button_rect().collidepoint(event.pos):
+                self.in_settings = False
+
     def handle_menu_click(self, pos):
         for rect, setting, value, _ in self.menu_buttons():
             if rect.collidepoint(pos) and self.menu_setting_enabled(setting):
                 setattr(self, setting, value)
         if self.start_button_rect().collidepoint(pos):
             self.start_game()
+        elif self.menu_settings_rect().collidepoint(pos):
+            self.open_settings()
 
     def handle_click(self, pos):
+        if self.gear_button_rect().collidepoint(pos):
+            self.open_settings()
+            return
+
         if self.result is not None:
             if self.play_again_rect().collidepoint(pos):
                 self.new_game()
@@ -457,7 +513,7 @@ class ChessGUI:
             self.selected = None
             return
 
-        if self.hint_button_rect().collidepoint(pos):
+        if self.settings["hints"] and self.hint_button_rect().collidepoint(pos):
             self.ask_for_hint()
             return
 
@@ -529,9 +585,13 @@ class ChessGUI:
         return [(pygame.Rect(left + i * PICKER_SIZE, top, PICKER_SIZE, PICKER_SIZE), move)
                 for i, move in enumerate(self.promotion_choices)]
 
+    def gear_button_rect(self):
+        """The settings button, top right of the side panel"""
+        return pygame.Rect(SIDE_PANEL_X + SIDE_PANEL_WIDTH - 14 - 26, BOARD_Y + 9, 26, 26)
+
     def hint_button_rect(self):
-        """The Hint button, top right of the side panel"""
-        return pygame.Rect(SIDE_PANEL_X + SIDE_PANEL_WIDTH - 14 - 64, BOARD_Y + 9, 64, 26)
+        """The Hint button, left of the settings button"""
+        return pygame.Rect(self.gear_button_rect().x - 8 - 64, BOARD_Y + 9, 64, 26)
 
     def play_again_rect(self):
         rect = pygame.Rect(0, 0, 124, 44)
@@ -581,7 +641,22 @@ class ChessGUI:
         # Side and difficulty only matter against the computer
         return setting in ("variant_key", "two_players") or not self.two_players
 
+    def menu_settings_rect(self):
+        return pygame.Rect((WIDTH - MENU_WIDTH) // 2, 424, 128, 48)
+
     def start_button_rect(self):
+        settings_button = self.menu_settings_rect()
+        return pygame.Rect(settings_button.right + 12, 424, MENU_WIDTH - settings_button.width - 12, 48)
+
+    # ---- settings screen geometry -----------------------------------------
+
+    def settings_rows(self):
+        """(rect, setting) for each switch on the settings screen; clicking anywhere on the row flips it"""
+        left = (WIDTH - MENU_WIDTH) // 2
+        return [(pygame.Rect(left, 92 + i * SETTINGS_ROW_HEIGHT, MENU_WIDTH, SETTINGS_ROW_HEIGHT - 6), name)
+                for i, (_, name) in enumerate(SETTING_SWITCHES)]
+
+    def done_button_rect(self):
         rect = pygame.Rect(0, 0, 200, 48)
         rect.center = (WIDTH // 2, 448)
         return rect
@@ -590,11 +665,15 @@ class ChessGUI:
 
     def draw(self):
         self.screen.fill(BACKGROUND)
+        if self.in_settings:
+            self.draw_settings()
+            return
         if self.in_menu:
             self.draw_menu()
             return
         self.draw_board()
-        self.draw_coordinates()
+        if self.settings["coordinates"]:
+            self.draw_coordinates()
         self.draw_side_panel()
         self.draw_status()
         if self.dragging:
@@ -638,11 +717,48 @@ class ChessGUI:
                 text = self.font.render(label, True, color)
                 self.screen.blit(text, text.get_rect(center=rect.center))
 
-        button = self.start_button_rect()
-        hover = button.collidepoint(mouse)
-        pygame.draw.rect(self.screen, BUTTON_HOVER if hover else BUTTON, button, border_radius=12)
-        label = self.font.render("Start game", True, TEXT)
+        for button, text, fill, hover_fill in ((self.menu_settings_rect(), "Settings", CHOICE, CHOICE_HOVER),
+                                               (self.start_button_rect(), "Start game", BUTTON, BUTTON_HOVER)):
+            pygame.draw.rect(self.screen, hover_fill if button.collidepoint(mouse) else fill, button,
+                             border_radius=12)
+            label = self.font.render(text, True, TEXT)
+            self.screen.blit(label, label.get_rect(center=button.center))
+
+    def draw_settings(self):
+        title = self.title_font.render("Settings", True, TEXT)
+        self.screen.blit(title, title.get_rect(center=(WIDTH // 2, 48)))
+        mouse = pygame.mouse.get_pos()
+        labels = {name: label for label, name in SETTING_SWITCHES}
+        for rect, name in self.settings_rows():
+            pygame.draw.rect(self.screen, CHOICE_HOVER if rect.collidepoint(mouse) else CHOICE, rect,
+                             border_radius=8)
+            label = self.font.render(labels[name], True, TEXT)
+            self.screen.blit(label, label.get_rect(midleft=(rect.x + 14, rect.centery)))
+            self.draw_switch(self.settings[name], pygame.Rect(rect.right - 14 - 44, rect.centery - 12, 44, 24))
+
+        button = self.done_button_rect()
+        pygame.draw.rect(self.screen, BUTTON_HOVER if button.collidepoint(mouse) else BUTTON, button,
+                         border_radius=12)
+        label = self.font.render("Done", True, TEXT)
         self.screen.blit(label, label.get_rect(center=button.center))
+
+    def draw_switch(self, on, rect):
+        """An on/off switch: green with the knob on the right when on"""
+        pygame.draw.rect(self.screen, BUTTON if on else DISABLED_TEXT, rect, border_radius=rect.height // 2)
+        knob_x = rect.right - rect.height // 2 if on else rect.x + rect.height // 2
+        pygame.draw.circle(self.screen, TEXT, (knob_x, rect.centery), rect.height // 2 - 3)
+
+    def draw_gear(self, center, color):
+        """A cog wheel, for the settings button"""
+        x, y = center
+        for i in range(8):  # the teeth
+            direction = pygame.Vector2(1, 0).rotate(i * 45)
+            across = pygame.Vector2(-direction.y, direction.x) * 2
+            inner, outer = direction * 6, direction * 10
+            pygame.draw.polygon(self.screen, color, [(x + p.x, y + p.y) for p in
+                                                     (inner - across, outer - across, outer + across, inner + across)])
+        pygame.draw.circle(self.screen, color, center, 7)
+        pygame.draw.circle(self.screen, SIDE_PANEL, center, 3)
 
     def draw_board_icon(self, variant, center):
         """A little picture of a game mode's board: its squares, with the holes left out"""
@@ -700,12 +816,12 @@ class ChessGUI:
         if self.hint:
             self.draw_hint_arrow()
 
-        if self.selected:
+        if self.selected and self.settings["show_moves"]:
             for move in self.moves_from(self.selected):
                 hint = self.move_dot if move.piece_captured == EMPTY else self.capture_ring
                 self.screen.blit(hint, self.square_rect(move.end_row, move.end_col))
 
-        if self.dragging:
+        if self.dragging and self.settings["show_moves"]:
             target = self.square_at(self.drag_pos)
             if target and self.moves_between(self.dragging, target):
                 pygame.draw.rect(self.screen, DROP_TARGET, self.square_rect(*target), 4)
@@ -747,15 +863,18 @@ class ChessGUI:
         left = area.x + 14
         self.screen.blit(self.small_font.render("MOVES", True, MUTED_TEXT), (left, area.y + 14))
 
-        button = self.hint_button_rect()
-        if self.can_ask_for_hint():
-            hover = button.collidepoint(pygame.mouse.get_pos())
-            fill, text_color = (BUTTON_HOVER if hover else BUTTON), TEXT
-        else:
-            fill, text_color = CHOICE, DISABLED_TEXT
-        pygame.draw.rect(self.screen, fill, button, border_radius=8)
-        label = self.small_font.render("Hint", True, text_color)
-        self.screen.blit(label, label.get_rect(center=button.center))
+        mouse = pygame.mouse.get_pos()
+        gear = self.gear_button_rect()
+        self.draw_gear(gear.center, TEXT if gear.collidepoint(mouse) else MUTED_TEXT)
+        if self.settings["hints"]:
+            button = self.hint_button_rect()
+            if self.can_ask_for_hint():
+                fill, text_color = (BUTTON_HOVER if button.collidepoint(mouse) else BUTTON), TEXT
+            else:
+                fill, text_color = CHOICE, DISABLED_TEXT
+            pygame.draw.rect(self.screen, fill, button, border_radius=8)
+            label = self.small_font.render("Hint", True, text_color)
+            self.screen.blit(label, label.get_rect(center=button.center))
 
         # Captured pieces at the bottom, one row per side, with the material count for the side ahead
         captured_top = area.bottom - 106
@@ -805,8 +924,8 @@ class ChessGUI:
         label = self.font.render(text, True, color)
         self.screen.blit(label, label.get_rect(midleft=(16, bar.centery)))
 
-        sound = "unmute" if self.sounds.muted else "mute"
-        keys = self.small_font.render(f"H hint  R restart  U undo  N menu  M {sound}", True, MUTED_TEXT)
+        keys = ("H hint  " if self.settings["hints"] else "") + "R restart  U undo  N menu  S settings"
+        keys = self.small_font.render(keys, True, MUTED_TEXT)
         if label.get_width() + keys.get_width() + 48 <= WIDTH:
             self.screen.blit(keys, keys.get_rect(midright=(WIDTH - 16, bar.centery)))
 
