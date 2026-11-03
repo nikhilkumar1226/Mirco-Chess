@@ -244,9 +244,6 @@ Mirco-Chess/
 └── pytest.ini
 ```
 
-## Image credits
-
-The piece images in `images/` come from: **TODO: add the source, author and license of the piece images.**
 
 ## License
 
