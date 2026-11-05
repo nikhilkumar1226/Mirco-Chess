@@ -108,7 +108,7 @@ Donut                              Pillars
 - A terminal version that needs nothing but Python, with all four boards
 - A pytest test suite, including GUI tests that run without opening a window
 
-## Installing and running
+## Installing guide
 
 You need Python 3 (developed with Python 3.13) and pygame 2.1 or newer.
 
