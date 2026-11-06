@@ -79,6 +79,8 @@ PIECE_TABLES = {'pawn': PAWN_TABLE, 'knight': KNIGHT_TABLE, 'bishop': BISHOP_TAB
 MOBILITY_BONUS = {'knight': 4, 'bishop': 4, 'rook': 2}
 # King safety: penalty for every attack by an enemy piece on the king's square or a square next to it
 KING_ZONE_ATTACK_PENALTY = 10
+# How many captures (or replies to check) the quiescence search plays at most past the full depth
+QUIESCENCE_PLIES = 8
 
 # How far the game is from the endgame: knights and bishops count 1, rooks 2.
 # The king's table slides from the middlegame one (all the pieces of the starting
@@ -260,18 +262,69 @@ def order_moves(moves):
     """
     return sorted(moves, key=move_priority, reverse=True)
 
-def legal_moves_in_order(game_state):
-    """Yield the legal moves, most promising first.
+def legal_moves_in_order(game_state, captures_only=False):
+    """Yield the legal moves (or only the captures and promotions), most promising first.
 
     Each move is only checked for legality (does it leave our king in check?)
     when the search actually reaches it, so moves skipped by pruning cost nothing.
     """
-    for move in order_moves(game_state.get_all_possible_moves()):
+    moves = game_state.get_all_possible_moves()
+    if captures_only:
+        moves = [move for move in moves if move.piece_captured != "--" or move.is_promotion]
+    for move in order_moves(moves):
         game_state.make_move(move)
         legal = not game_state.is_king_attacked(white=not game_state.white_to_move)
         game_state.undo_move(move)
         if legal:
             yield move
+
+
+def quiescence(game_state, alpha, beta, maximizing_player, ply, plies_left=QUIESCENCE_PLIES):
+    """At the end of the main search, play on with captures and promotions until the position is quiet.
+
+    Without this the search would stop in the middle of an exchange and believe, say,
+    that a rook which has just taken a pawn is safe when it can be taken back. The side
+    to move may also "stand pat": keep the evaluation as it is if no capture improves on
+    it. A side in check can't stand pat, so then every move is tried (and none means mate).
+    """
+    if game_state.is_insufficient_material():
+        return 0
+    if plies_left == 0:
+        return evaluate_board(game_state)  # the limit, in case the captures and checks go on and on
+    in_check = game_state.in_check()
+
+    if in_check:
+        best = float('-inf') if maximizing_player else float('inf')
+    else:
+        best = evaluate_board(game_state)  # standing pat
+        if maximizing_player:
+            if best >= beta:
+                return best
+            alpha = max(alpha, best)
+        else:
+            if best <= alpha:
+                return best
+            beta = min(beta, best)
+
+    found_move = False
+    for move in legal_moves_in_order(game_state, captures_only=not in_check):
+        found_move = True
+        game_state.make_move(move)
+        score = quiescence(game_state, alpha, beta, not maximizing_player, ply + 1, plies_left - 1)
+        game_state.undo_move(move)
+        if maximizing_player:
+            best = max(best, score)
+            alpha = max(alpha, score)
+        else:
+            best = min(best, score)
+            beta = min(beta, score)
+        if beta <= alpha:
+            break
+
+    if in_check and not found_move:
+        return -(MATE_SCORE - ply) if game_state.white_to_move else MATE_SCORE - ply
+    return best
+
 
 def minimax_alpha_beta(game_state, depth, alpha, beta, maximizing_player, ply=1):
     """
@@ -292,9 +345,9 @@ def minimax_alpha_beta(game_state, depth, alpha, beta, maximizing_player, ply=1)
     if game_state.is_threefold_repetition() or game_state.is_insufficient_material():
         return 0
 
-    # Base case: reached max depth
+    # Reached the full depth: settle any captures first, then evaluate
     if depth == 0:
-        return evaluate_board(game_state)
+        return quiescence(game_state, alpha, beta, maximizing_player, ply)
 
     found_legal_move = False
 

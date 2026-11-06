@@ -3,10 +3,10 @@ import time
 
 import pytest
 
-from ai import (get_ai_move, evaluate_board, minimax_alpha_beta, DIFFICULTY_DEPTHS,
+from ai import (get_ai_move, evaluate_board, minimax_alpha_beta, quiescence, DIFFICULTY_DEPTHS,
                 DIFFICULTY_MARGINS, MATE_SCORE)
 from chess_engine import GameState
-from helpers import position, square
+from helpers import position, square, find_move
 
 
 def is_move(move, start, end):
@@ -103,6 +103,42 @@ def test_easy_never_misses_a_mate_in_one(pieces, white_to_move, mate):
     for seed in range(20):
         move = get_ai_move(gs, "easy", rng=random.Random(seed))
         assert is_move(move, *mate) and move.promotion_piece in (None, "rook")
+
+
+def grab_the_defended_pawn():
+    """White to move: Ra1xa4 wins a pawn, but the knight on c5 takes the rook back"""
+    return position({"d1": "white_king", "a1": "white_rook", "b2": "white_pawn", "d5": "black_king",
+                     "a4": "black_pawn", "c4": "black_pawn", "c5": "black_knight"})
+
+
+def test_quiescence_sees_the_recapture():
+    gs = grab_the_defended_pawn()
+    gs.make_move(find_move(gs.get_valid_moves(), "a1", "a4")[0])
+    assert evaluate_board(gs) > 100  # judged as it stands, White is a pawn up...
+    assert quiescence(gs, float("-inf"), float("inf"), False, 2) < -100  # ...but not after Nxa4
+
+
+def test_even_a_one_move_search_does_not_grab_a_defended_pawn():
+    move = get_ai_move(grab_the_defended_pawn(), depth=1)
+    assert not is_move(move, "a1", "a4")
+
+
+def test_quiescence_spots_checkmate():
+    # White is mated (Ra1 with the black king on c3 covering c2 and d2)
+    gs = position({"c3": "black_king", "a1": "black_rook", "d1": "white_king"})
+    assert quiescence(gs, float("-inf"), float("inf"), True, 1) == -(MATE_SCORE - 1)
+
+
+def test_quiescence_scores_are_whole_numbers():
+    rng = random.Random(8)
+    for _ in range(30):
+        gs = GameState()
+        for _ in range(rng.randrange(0, 16)):
+            moves = gs.get_valid_moves()
+            if not moves:
+                break
+            gs.make_move(rng.choice(moves))
+        assert isinstance(quiescence(gs, float("-inf"), float("inf"), gs.white_to_move, 1), int)
 
 
 def turned_around(gs):
