@@ -612,8 +612,8 @@ def test_the_computer_keeps_an_eye_on_its_clock(timed, monkeypatch):
     app, time = timed
     seen = []
 
-    def recording_search(position, difficulty, time_left=None):
-        seen.append(time_left)
+    def recording_search(position, difficulty, **options):
+        seen.append(options.get("time_left"))
         return position.get_valid_moves()[0]
 
     monkeypatch.setattr(gui, "get_ai_move", recording_search)

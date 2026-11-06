@@ -28,7 +28,7 @@ def load(path=None):
     try:
         with open(path or STATS_PATH) as file:
             saved = json.load(file)
-    except (OSError, ValueError):
+    except Exception:  # missing, damaged, or (in a browser) no files to read at all
         return stats
     if not isinstance(saved, dict):
         return stats
@@ -46,8 +46,8 @@ def save(stats, path=None):
     try:
         with open(path or STATS_PATH, "w") as file:
             json.dump(stats, file, indent=2)
-    except OSError:
-        pass  # e.g. a read-only home folder: the stats just aren't remembered
+    except Exception:
+        pass  # e.g. a read-only home folder, or a browser: the stats just aren't remembered
 
 
 def expected_score(rating, opponent):

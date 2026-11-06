@@ -480,22 +480,44 @@ def minimax_alpha_beta(game_state, depth, alpha, beta, maximizing_player, ply=1,
         table[key] = (depth, to_table(best, ply), bound, best_move)
     return best
 
-def position_score(game_state, depth):
-    """How good the position is for White, in centipawns, from a search `depth` plies deep.
+@dataclass
+class Analysis:
+    score: int  # how good the position is for White
+    line: list  # the moves the search expects to follow
+    depth: int  # how many plies deep the search went
+
+
+def analyse(game_state, depth, time_limit=None):
+    """Score a position with a search `depth` plies deep. With a time limit (in seconds) it
+    searches 1 ply deep, then 2, 3 and so on up to `depth`, and keeps the deepest search
+    that finished in time (the first one always finishes).
 
     A forced mate scores close to MATE_SCORE (less the moves it takes), negative if Black mates.
     """
-    return minimax_alpha_beta(game_state, depth, float('-inf'), float('inf'), game_state.white_to_move,
-                              search=Search())
-
-
-def analyse_position(game_state, depth):
-    """(score, line): how good the position is for White, as position_score works it out, and
-    the moves the search expects to follow"""
     search = Search()
-    score = minimax_alpha_beta(game_state, depth, float('-inf'), float('inf'), game_state.white_to_move,
-                               search=search)
-    return score, search.lines.get(1, [])
+    deadline = None if time_limit is None else time.perf_counter() + time_limit
+    analysis = None
+    for current_depth in ([depth] if time_limit is None else range(1, depth + 1)):
+        if analysis and time.perf_counter() >= deadline:
+            break
+        search.deadline = deadline if analysis else None
+        score = minimax_alpha_beta(game_state, current_depth, float('-inf'), float('inf'),
+                                   game_state.white_to_move, search=search)
+        if search.stopped:
+            break
+        analysis = Analysis(score, search.lines.get(1, []), current_depth)
+    return analysis
+
+
+def position_score(game_state, depth, time_limit=None):
+    """How good the position is for White, in centipawns (see analyse)"""
+    return analyse(game_state, depth, time_limit).score
+
+
+def analyse_position(game_state, depth, time_limit=None):
+    """(score, line): how good the position is for White, and the moves the search expects to follow"""
+    analysis = analyse(game_state, depth, time_limit)
+    return analysis.score, analysis.line
 
 
 def move_mates_within(game_state, move, moves):
@@ -555,7 +577,7 @@ def score_root_moves(game_state, moves, depth, margin, search):
     return scored_moves, best_score
 
 
-def search_move(game_state, difficulty="medium", depth=None, rng=None, time_left=None):
+def search_move(game_state, difficulty="medium", depth=None, rng=None, time_left=None, time_limit=None):
     """
     Main AI function - Get the best move using Minimax + Alpha-Beta Pruning
     Works for whichever side is to move, so the AI can play White or Black.
@@ -572,6 +594,7 @@ def search_move(game_state, difficulty="medium", depth=None, rng=None, time_left
             result doesn't depend on how fast the computer is
         rng: Optional random.Random, used to choose between moves that are good enough
         time_left: Optional seconds left on the AI's chess clock
+        time_limit: Optional most seconds to think, if that's less than its level allows
 
     Returns:
         A SearchResult, or None if no moves are available
@@ -589,7 +612,8 @@ def search_move(game_state, difficulty="medium", depth=None, rng=None, time_left
         depths, deadline = [depth], None
     else:
         depths = range(1, DIFFICULTY_DEPTHS[difficulty] + 1)
-        deadline = time.perf_counter() + time_budget(difficulty, time_left)
+        budget = time_budget(difficulty, time_left)
+        deadline = time.perf_counter() + (budget if time_limit is None else min(budget, time_limit))
     search = Search()
     moves = order_moves(valid_moves)
     finished = None
@@ -616,7 +640,7 @@ def search_move(game_state, difficulty="medium", depth=None, rng=None, time_left
     return SearchResult(move, score, reached, search.nodes, line)
 
 
-def get_ai_move(game_state, difficulty="medium", depth=None, rng=None, time_left=None):
+def get_ai_move(game_state, difficulty="medium", depth=None, rng=None, time_left=None, time_limit=None):
     """The move search_move chooses (see there), or None if there are no moves"""
-    result = search_move(game_state, difficulty, depth, rng, time_left)
+    result = search_move(game_state, difficulty, depth, rng, time_left, time_limit)
     return result.move if result else None

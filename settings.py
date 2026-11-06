@@ -44,7 +44,7 @@ def load(path=None):
     try:
         with open(path or SETTINGS_PATH) as file:
             saved = json.load(file)
-    except (OSError, ValueError):
+    except Exception:  # missing, damaged, or (in a browser) no files to read at all
         return settings
     if isinstance(saved, dict):
         for key, value in saved.items():
@@ -59,5 +59,5 @@ def save(settings, path=None):
     try:
         with open(path or SETTINGS_PATH, "w") as file:
             json.dump(settings, file, indent=2)
-    except OSError:
-        pass  # e.g. a read-only home folder: the settings just aren't remembered
+    except Exception:
+        pass  # e.g. a read-only home folder, or a browser: the settings just aren't remembered

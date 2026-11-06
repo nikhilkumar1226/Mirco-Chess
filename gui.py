@@ -1,13 +1,18 @@
 """Micro Chess in a pygame window: click a piece and then its new square, or drag it there.
 
 The AI thinks in a background thread, so the window keeps responding while it searches.
+The main loop is async so the same code runs in a web browser with pygbag, where there
+are no threads: there each search waits for a frame showing "Thinking..." and then runs
+with a time limit.
 """
 
+import asyncio
 import copy
 import json
 import os
 import queue
 import random
+import sys
 import threading
 import traceback
 
@@ -15,7 +20,8 @@ import pygame
 
 import settings
 import stats
-from ai import get_ai_move, search_move, position_score, analyse_position, move_mates_within, MATE_SCORE
+from ai import (get_ai_move, search_move, analyse, position_score, analyse_position, move_mates_within,
+                MATE_SCORE)
 from chess_engine import (GameState, ROWS, EMPTY, HOLE, VARIANTS, read_game_code, write_game_code,
                           square_letter)
 from sounds import Sounds
@@ -32,6 +38,8 @@ CAPTURED_SIZE = 28  # captured pieces are shown small
 WIDTH = SIDE_PANEL_X + SIDE_PANEL_WIDTH + 16
 HEIGHT = BOARD_Y + BOARD_AREA_HEIGHT + 32 + STATUS_HEIGHT
 FPS = 60
+IN_BROWSER = sys.platform == "emscripten"  # running in a web page, made with pygbag
+BROWSER_TIME_LIMIT = 1.0  # seconds: in the browser every search stops by then, so the page never freezes for long
 ANIMATION_MS = 160  # how long a piece takes to slide to its new square
 
 # Colors
@@ -140,7 +148,7 @@ def copy_text(text):
             pygame.scrap.init()
         pygame.scrap.put(pygame.SCRAP_TEXT, text.encode("utf-8"))
         return True
-    except pygame.error:
+    except Exception:  # no clipboard here (in a browser it may not exist at all)
         return False
 
 
@@ -150,7 +158,7 @@ def pasted_text():
         if not pygame.scrap.get_init():
             pygame.scrap.init()
         data = pygame.scrap.get(pygame.SCRAP_TEXT)
-    except pygame.error:
+    except Exception:
         return None
     text = data.decode("utf-8", errors="replace").replace("\x00", "").strip() if data else ""
     return text or None
@@ -309,6 +317,8 @@ class ChessGUI:
         self.in_settings = False  # the settings screen is open (over the menu or the game)
         self.in_menu = True
         self.notice = None  # (message, time it goes away) shown at the top of the window
+        self.waiting_search = None  # in the browser: a search to run at the start of the next frame
+        self.eval_waiting = False  # in the browser: the evaluation bar is to be worked out next frame
         self.start_code = None  # a position code to start games from, instead of the board's usual start
         self.stats = stats.load()
         self.in_stats = False  # the stats screen is open (over the start menu)
@@ -461,10 +471,16 @@ class ChessGUI:
     def update_eval(self):
         """The score for the evaluation bar and the line of play the AI expects
         (None and an empty line while the bar is switched off, or in a puzzle, where it would give the answer away)"""
-        if self.settings["eval_bar"] and self.puzzle_index is None:
-            self.eval_score, self.eval_line = analyse_position(self.board_view()[0], EVAL_BAR_DEPTH)
+        if not self.settings["eval_bar"] or self.puzzle_index is not None:
+            self.eval_score, self.eval_line, self.eval_waiting = None, [], False
+        elif IN_BROWSER:
+            self.eval_waiting = True  # next frame, after this one has shown "Thinking..."
         else:
-            self.eval_score, self.eval_line = None, []
+            self.work_out_eval()
+
+    def work_out_eval(self, time_limit=None):
+        self.eval_score, self.eval_line = analyse_position(self.board_view()[0], EVAL_BAR_DEPTH, time_limit)
+        self.eval_waiting = False
 
     def show_notice(self, message):
         self.notice = (message, pygame.time.get_ticks() + NOTICE_MS)
@@ -483,7 +499,7 @@ class ChessGUI:
             with open(CODE_PATH, "w") as file:
                 file.write(code + "\n")
             self.show_notice(f"No clipboard: saved the game code to {CODE_PATH.replace(os.path.expanduser('~'), '~')}")
-        except OSError:
+        except Exception:  # (a browser may not let it write files at all)
             self.show_notice("Couldn't copy the game code")
 
     def paste_game_code(self):
@@ -494,7 +510,7 @@ class ChessGUI:
             try:
                 with open(CODE_PATH) as file:
                     text = file.read().strip()
-            except OSError:
+            except Exception:
                 text = ""
         if not text:
             self.show_notice("Nothing to paste: copy a game code first")
@@ -652,15 +668,16 @@ class ChessGUI:
         """
         gs = self.position_after(i)
         white = gs.white_to_move
-        best = position_score(gs, REVIEW_DEPTH)
+        # (In the browser with a time limit; the move is then judged one ply less deep than
+        # the deepest search before it that finished, so the two scores still compare)
+        before = analyse(gs, REVIEW_DEPTH, BROWSER_TIME_LIMIT if IN_BROWSER else None)
         gs.make_move(self.move_log[i])
-        played = position_score(gs, REVIEW_DEPTH - 1)
+        played = position_score(gs, before.depth - 1)
         gs.undo_move(self.move_log[i])
-        lost = best - played if white else played - best
+        lost = before.score - played if white else played - before.score
         if lost < MISTAKE:
             return "", []
-        better = search_move(gs, depth=REVIEW_DEPTH, rng=random.Random(0))
-        return ("??" if lost >= BLUNDER else "?"), better.line
+        return ("??" if lost >= BLUNDER else "?"), before.line
 
     def review_step(self, action):
         """Move through the review: "first", "back", "forward" or "last" (or "done" to stop)"""
@@ -845,20 +862,37 @@ class ChessGUI:
         if kind == "ai" and self.clock_ms is not None:
             time_left = self.clock_ms["white" if self.gs.white_to_move else "black"] / 1000
 
-        def think():
-            try:
-                move = get_ai_move(position, difficulty, time_left=time_left)
-            except Exception:
-                traceback.print_exc()
-                move = None  # update() copes with a search that found nothing
-            self.search_results.put((search_id, kind, move))
-
-        self.search_thread = threading.Thread(target=think, daemon=True)
+        if IN_BROWSER:
+            # No threads in a browser: the search runs at the start of the next frame, once
+            # this one has shown "Thinking..."
+            self.waiting_search = (search_id, kind, position, difficulty, time_left)
+            return
+        self.search_thread = threading.Thread(target=self.search_for, daemon=True,
+                                              args=(search_id, kind, position, difficulty, time_left))
         self.search_thread.start()
+
+    def search_for(self, search_id, kind, position, difficulty, time_left, time_limit=None):
+        """Find a move and hand it to update() (on a thread on the desktop, or straight away in the browser)"""
+        try:
+            move = get_ai_move(position, difficulty, time_left=time_left, time_limit=time_limit)
+        except Exception:
+            traceback.print_exc()
+            move = None  # update() copes with a search that found nothing
+        self.search_results.put((search_id, kind, move))
+
+    def run_waiting_searches(self):
+        """In the browser, at the start of a frame: the searches asked for last frame, now that
+        it has shown "Thinking...", each stopping within the time limit"""
+        if self.waiting_search:
+            search, self.waiting_search = self.waiting_search, None
+            self.search_for(*search, time_limit=BROWSER_TIME_LIMIT)
+        if self.eval_waiting:
+            self.work_out_eval(BROWSER_TIME_LIMIT)
 
     def cancel_search(self):
         """Forget any search still running (its answer is ignored when it arrives)"""
         self.search_id += 1
+        self.waiting_search = None
         self.ai_thinking = False
         self.hint_thinking = False
 
@@ -1360,7 +1394,7 @@ class ChessGUI:
         self.draw_board()
         if self.settings["coordinates"]:
             self.draw_coordinates()
-        if self.eval_score is not None:
+        if self.eval_score is not None or self.eval_waiting:
             self.draw_eval_bar()
         self.draw_side_panel()
         self.draw_status()
@@ -1644,17 +1678,19 @@ class ChessGUI:
 
     def draw_eval_bar(self):
         """Who is ahead, by the AI's reckoning: White's part of the bar grows from White's side"""
-        white_height = round(EVAL_BAR.height * white_share(self.eval_score))
+        score = self.eval_score or 0  # (until the first score is worked out, the bar is even)
+        white_height = round(EVAL_BAR.height * white_share(score))
         self.screen.fill((40, 44, 40), EVAL_BAR)
         white_y = EVAL_BAR.y if self.flipped else EVAL_BAR.bottom - white_height
         self.screen.fill((240, 240, 235), (EVAL_BAR.x, white_y, EVAL_BAR.width, white_height))
         pygame.draw.rect(self.screen, MUTED_TEXT, EVAL_BAR, 1)
-        label = self.small_font.render(score_text(self.eval_score), True, MUTED_TEXT)
+        label = self.small_font.render(score_text(score), True, MUTED_TEXT)
         self.screen.blit(label, label.get_rect(center=(EVAL_BAR.centerx, EVAL_BAR.bottom + 16)))
         # Beside the score, under the side panel: the line the AI expects, as many moves as fit
         left = EVAL_BAR.right + 12
         for count in range(4, 0, -1):
-            line = self.small_font.render(line_text(self.eval_line, self.gs.rows, count), True, MUTED_TEXT)
+            text = "Thinking..." if self.eval_waiting else line_text(self.eval_line, self.gs.rows, count)
+            line = self.small_font.render(text, True, MUTED_TEXT)
             if left + line.get_width() <= WIDTH - 16:
                 break
         self.screen.blit(line, line.get_rect(midleft=(left, EVAL_BAR.bottom + 16)))
@@ -1878,20 +1914,22 @@ class ChessGUI:
 
     # ---- main loop --------------------------------------------------------
 
-    def run(self):
+    async def run(self):
         while self.running:
+            self.run_waiting_searches()  # (only ever any in the browser)
             for event in pygame.event.get():
                 self.handle_event(event)
             self.update()
             self.draw()
             pygame.display.flip()
             self.clock.tick(FPS)
+            await asyncio.sleep(0)  # in the browser, this lets the page show the frame and take input
         pygame.quit()
 
 
-def main():
-    ChessGUI().run()
+async def main():
+    await ChessGUI().run()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

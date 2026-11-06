@@ -1,6 +1,6 @@
 """Move and capture sounds, made in code so the game needs no sound files.
 
-If the computer has no audio device the game still runs, just silently.
+If the computer has no audio device (or a browser won't play sound) the game still runs, just silently.
 """
 
 import array
@@ -60,20 +60,23 @@ class Sounds:
         try:
             if not pygame.mixer.get_init():
                 pygame.mixer.init()
-        except pygame.error:
+            sample_rate, size, channels = pygame.mixer.get_init()
+        except Exception:
             return  # no audio device: carry on without sound
-        sample_rate, size, channels = pygame.mixer.get_init()
         if size != -16:  # the samples are built as signed 16-bit numbers
             return
         try:
             for name, samples in make_samples(sample_rate).items():
                 self.sounds[name] = pygame.mixer.Sound(buffer=to_16_bit(samples, channels).tobytes())
-        except pygame.error:
+        except Exception:
             self.sounds = {}
 
     def play(self, name):
         if not self.muted and name in self.sounds:
-            self.sounds[name].play()
+            try:
+                self.sounds[name].play()
+            except Exception:
+                pass  # a sound that won't play is no reason to stop the game
 
     def toggle_mute(self):
         self.muted = not self.muted
