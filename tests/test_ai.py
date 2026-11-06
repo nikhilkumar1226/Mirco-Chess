@@ -3,9 +3,10 @@ import time
 
 import pytest
 
-from ai import (get_ai_move, evaluate_board, minimax_alpha_beta, quiescence, DIFFICULTY_DEPTHS,
+import ai
+from ai import (get_ai_move, evaluate_board, minimax_alpha_beta, quiescence, Search, DIFFICULTY_DEPTHS,
                 DIFFICULTY_MARGINS, MATE_SCORE)
-from chess_engine import GameState
+from chess_engine import GameState, MICRO, DONUT
 from helpers import position, square, find_move
 
 
@@ -139,6 +140,43 @@ def test_quiescence_scores_are_whole_numbers():
                 break
             gs.make_move(rng.choice(moves))
         assert isinstance(quiescence(gs, float("-inf"), float("inf"), gs.white_to_move, 1), int)
+
+
+def full_window_score(gs, depth, search):
+    return minimax_alpha_beta(gs, depth, float("-inf"), float("inf"), gs.white_to_move, search=search)
+
+
+def test_the_transposition_table_gives_the_same_scores_with_less_work():
+    rng = random.Random(4)
+    with_table_nodes = without_table_nodes = 0
+    for variant in (MICRO, DONUT):
+        gs = GameState(variant=variant)
+        for _ in range(6):  # a few moves into a game
+            gs.make_move(rng.choice(gs.get_valid_moves()))
+        for move in gs.get_valid_moves():
+            gs.make_move(move)
+            with_table, without_table = Search(), Search(use_table=False)
+            assert full_window_score(gs, 4, with_table) == full_window_score(gs, 4, without_table)
+            gs.undo_move(move)
+            with_table_nodes += with_table.nodes
+            without_table_nodes += without_table.nodes
+    assert with_table_nodes < without_table_nodes
+
+
+def test_the_ai_picks_the_same_move_without_the_table(monkeypatch):
+    with_table = get_ai_move(GameState(), depth=4, rng=random.Random(3))
+    monkeypatch.setattr(ai, "Search", lambda: Search(use_table=False))
+    assert get_ai_move(GameState(), depth=4, rng=random.Random(3)) == with_table
+
+
+def test_mate_scores_stay_right_when_stored_in_the_table():
+    # The same mate is stored at one distance from the root and read back at another
+    for ply in (1, 4, 9):
+        score = MATE_SCORE - 7
+        assert ai.from_table(ai.to_table(score, ply), ply) == score
+        assert ai.from_table(ai.to_table(-score, ply), ply) == -score
+    assert ai.to_table(MATE_SCORE - 7, 3) == MATE_SCORE - 4  # mate 4 plies after this position
+    assert ai.to_table(250, 3) == 250  # ordinary scores are stored as they are
 
 
 def turned_around(gs):

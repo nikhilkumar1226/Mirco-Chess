@@ -82,6 +82,12 @@ KING_ZONE_ATTACK_PENALTY = 10
 # How many captures (or replies to check) the quiescence search plays at most past the full depth
 QUIESCENCE_PLIES = 8
 
+# The transposition table: what a search has learned about each position, so a position
+# reached again by a different order of moves isn't searched twice. A stored score is
+# EXACT, or only a LOWER or UPPER bound when the search was cut short by alpha-beta.
+EXACT, LOWER, UPPER = "exact", "lower", "upper"
+TABLE_LIMIT = 200_000  # positions; the table starts again empty if it gets this big
+
 # How far the game is from the endgame: knights and bishops count 1, rooks 2.
 # The king's table slides from the middlegame one (all the pieces of the starting
 # position still on the board) to the endgame one (none left).
@@ -185,6 +191,33 @@ def tables_for(game_state):
     return EVALUATION_TABLES[variant.key]
 
 
+class Search:
+    """What one search keeps track of: its transposition table and how many positions it has
+    looked at. A new one is made for every move, so the table never grows old or large."""
+
+    def __init__(self, use_table=True):
+        self.table = {} if use_table else None  # position key -> (depth, score, bound, best move)
+        self.nodes = 0
+
+
+def is_mate_score(score):
+    return abs(score) >= MATE_SCORE - 100
+
+
+def to_table(score, ply):
+    """A mate score counts plies from the root; the table stores it counted from this position,
+    because the same position can be reached at different distances from the root"""
+    if is_mate_score(score):
+        return score + ply if score > 0 else score - ply
+    return score
+
+
+def from_table(score, ply):
+    if is_mate_score(score):
+        return score - ply if score > 0 else score + ply
+    return score
+
+
 @lru_cache(maxsize=1000)
 def get_piece_value(piece):
     """Get numerical value of a piece (cached for performance)"""
@@ -262,8 +295,9 @@ def order_moves(moves):
     """
     return sorted(moves, key=move_priority, reverse=True)
 
-def legal_moves_in_order(game_state, captures_only=False):
-    """Yield the legal moves (or only the captures and promotions), most promising first.
+def legal_moves_in_order(game_state, captures_only=False, first=None):
+    """Yield the legal moves (or only the captures and promotions), most promising first,
+    starting with `first` if it's one of them.
 
     Each move is only checked for legality (does it leave our king in check?)
     when the search actually reaches it, so moves skipped by pruning cost nothing.
@@ -271,7 +305,11 @@ def legal_moves_in_order(game_state, captures_only=False):
     moves = game_state.get_all_possible_moves()
     if captures_only:
         moves = [move for move in moves if move.piece_captured != "--" or move.is_promotion]
-    for move in order_moves(moves):
+    moves = order_moves(moves)
+    if first is not None and first in moves:
+        moves.remove(first)
+        moves.insert(0, first)
+    for move in moves:
         game_state.make_move(move)
         legal = not game_state.is_king_attacked(white=not game_state.white_to_move)
         game_state.undo_move(move)
@@ -279,7 +317,7 @@ def legal_moves_in_order(game_state, captures_only=False):
             yield move
 
 
-def quiescence(game_state, alpha, beta, maximizing_player, ply, plies_left=QUIESCENCE_PLIES):
+def quiescence(game_state, alpha, beta, maximizing_player, ply, plies_left=QUIESCENCE_PLIES, search=None):
     """At the end of the main search, play on with captures and promotions until the position is quiet.
 
     Without this the search would stop in the middle of an exchange and believe, say,
@@ -287,6 +325,8 @@ def quiescence(game_state, alpha, beta, maximizing_player, ply, plies_left=QUIES
     to move may also "stand pat": keep the evaluation as it is if no capture improves on
     it. A side in check can't stand pat, so then every move is tried (and none means mate).
     """
+    if search is not None:
+        search.nodes += 1
     if game_state.is_insufficient_material():
         return 0
     if plies_left == 0:
@@ -310,7 +350,7 @@ def quiescence(game_state, alpha, beta, maximizing_player, ply, plies_left=QUIES
     for move in legal_moves_in_order(game_state, captures_only=not in_check):
         found_move = True
         game_state.make_move(move)
-        score = quiescence(game_state, alpha, beta, not maximizing_player, ply + 1, plies_left - 1)
+        score = quiescence(game_state, alpha, beta, not maximizing_player, ply + 1, plies_left - 1, search)
         game_state.undo_move(move)
         if maximizing_player:
             best = max(best, score)
@@ -326,7 +366,7 @@ def quiescence(game_state, alpha, beta, maximizing_player, ply, plies_left=QUIES
     return best
 
 
-def minimax_alpha_beta(game_state, depth, alpha, beta, maximizing_player, ply=1):
+def minimax_alpha_beta(game_state, depth, alpha, beta, maximizing_player, ply=1, search=None):
     """
     Minimax Algorithm with Alpha-Beta Pruning
 
@@ -337,58 +377,66 @@ def minimax_alpha_beta(game_state, depth, alpha, beta, maximizing_player, ply=1)
         beta: Best value minimizing player can guarantee
         maximizing_player: True if maximizing (White), False if minimizing (Black)
         ply: How many moves deep we already are (used to prefer faster mates)
+        search: Optional Search, for its transposition table and to count positions
 
     Returns:
         Best evaluation score for current position
     """
+    if search is not None:
+        search.nodes += 1
     # Draws by repetition or insufficient material
     if game_state.is_threefold_repetition() or game_state.is_insufficient_material():
         return 0
 
     # Reached the full depth: settle any captures first, then evaluate
     if depth == 0:
-        return quiescence(game_state, alpha, beta, maximizing_player, ply)
+        return quiescence(game_state, alpha, beta, maximizing_player, ply, search=search)
 
-    found_legal_move = False
+    # A position already searched to this depth (reached by another order of moves) isn't
+    # searched again, if what was learned about it is enough to decide here
+    table = search.table if search is not None else None
+    key = game_state.position_history[-1]
+    known_best = None
+    if table is not None and key in table:
+        stored_depth, stored_score, bound, known_best = table[key]
+        score = from_table(stored_score, ply)
+        if stored_depth == depth and (bound == EXACT or (bound == LOWER and score >= beta)
+                                      or (bound == UPPER and score <= alpha)):
+            return score
 
-    if maximizing_player:  # White's turn (maximize score)
-        max_eval = float('-inf')
-        for move in legal_moves_in_order(game_state):
-            found_legal_move = True
-            game_state.make_move(move)
-            eval_score = minimax_alpha_beta(game_state, depth - 1, alpha, beta, False, ply + 1)
-            game_state.undo_move(move)
+    window = (alpha, beta)
+    best = float('-inf') if maximizing_player else float('inf')
+    best_move = None
+    # White maximizes the score and Black minimizes it; the move that was best here before goes first
+    for move in legal_moves_in_order(game_state, first=known_best):
+        game_state.make_move(move)
+        score = minimax_alpha_beta(game_state, depth - 1, alpha, beta, not maximizing_player, ply + 1, search)
+        game_state.undo_move(move)
 
-            max_eval = max(max_eval, eval_score)
-            alpha = max(alpha, eval_score)
+        if (score > best) if maximizing_player else (score < best):
+            best, best_move = score, move
+        if maximizing_player:
+            alpha = max(alpha, score)
+        else:
+            beta = min(beta, score)
 
-            # Alpha-Beta Pruning: Cut off if beta <= alpha
-            if beta <= alpha:
-                break
-        best = max_eval
+        # Alpha-Beta Pruning: Cut off if beta <= alpha
+        if beta <= alpha:
+            break
 
-    else:  # Black's turn (minimize score)
-        min_eval = float('inf')
-        for move in legal_moves_in_order(game_state):
-            found_legal_move = True
-            game_state.make_move(move)
-            eval_score = minimax_alpha_beta(game_state, depth - 1, alpha, beta, True, ply + 1)
-            game_state.undo_move(move)
-
-            min_eval = min(min_eval, eval_score)
-            beta = min(beta, eval_score)
-
-            # Alpha-Beta Pruning: Cut off if beta <= alpha
-            if beta <= alpha:
-                break
-        best = min_eval
-
-    if not found_legal_move:
+    if best_move is None:
         if game_state.in_check():
             # Checkmate: the side to move has lost. Subtracting ply makes a
             # quicker mate worth more than a slower one
             return -(MATE_SCORE - ply) if game_state.white_to_move else MATE_SCORE - ply
         return 0  # Stalemate is a draw
+
+    if table is not None:
+        # A score outside the window is only a bound: the true score is at most (or at least) that
+        bound = UPPER if best <= window[0] else LOWER if best >= window[1] else EXACT
+        if len(table) >= TABLE_LIMIT:
+            table.clear()
+        table[key] = (depth, to_table(best, ply), bound, best_move)
     return best
 
 def position_score(game_state, depth):
@@ -396,7 +444,8 @@ def position_score(game_state, depth):
 
     A forced mate scores close to MATE_SCORE (less the moves it takes), negative if Black mates.
     """
-    return minimax_alpha_beta(game_state, depth, float('-inf'), float('inf'), game_state.white_to_move)
+    return minimax_alpha_beta(game_state, depth, float('-inf'), float('inf'), game_state.white_to_move,
+                              search=Search())
 
 
 def get_ai_move(game_state, difficulty="medium", depth=None, rng=None):
@@ -427,6 +476,7 @@ def get_ai_move(game_state, difficulty="medium", depth=None, rng=None):
 
     # White wants the highest score, Black the lowest
     ai_is_white = game_state.white_to_move
+    search = Search()
     scored_moves = []
     best_score = float('-inf') if ai_is_white else float('inf')
 
@@ -438,15 +488,17 @@ def get_ai_move(game_state, difficulty="medium", depth=None, rng=None):
         # still prunes worse moves, but moves within the margin get their exact score
         # (scores are whole numbers), so we know which ones are good enough.
         if ai_is_white:
-            score = minimax_alpha_beta(game_state, depth - 1, best_score - margin - 1, float('inf'), False)
+            score = minimax_alpha_beta(game_state, depth - 1, best_score - margin - 1, float('inf'), False,
+                                       search=search)
         else:
-            score = minimax_alpha_beta(game_state, depth - 1, float('-inf'), best_score + margin + 1, True)
+            score = minimax_alpha_beta(game_state, depth - 1, float('-inf'), best_score + margin + 1, True,
+                                       search=search)
         game_state.undo_move(move)
 
         scored_moves.append((score, move))
         best_score = max(best_score, score) if ai_is_white else min(best_score, score)
 
-    if abs(best_score) >= MATE_SCORE - 100:
+    if is_mate_score(best_score):
         margin = 0  # a mate is coming: take the quickest win, or put off the loss the longest
     # Pick at random between the moves within the margin (with no margin, the equally good ones)
     return rng.choice([move for score, move in scored_moves if abs(score - best_score) <= margin])
