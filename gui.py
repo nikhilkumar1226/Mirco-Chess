@@ -14,7 +14,7 @@ import pygame
 
 import settings
 from ai import get_ai_move, search_move, position_score, analyse_position, MATE_SCORE
-from chess_engine import GameState, ROWS, EMPTY, HOLE, VARIANTS
+from chess_engine import GameState, ROWS, EMPTY, HOLE, VARIANTS, read_game_code, write_game_code
 from sounds import Sounds
 
 # Layout, in pixels
@@ -107,6 +107,9 @@ DRAW_TEXT = {
     "time_draw": ("Time's up!", "Draw: no pieces left to win"),
 }
 LOW_TIME_MS = 10_000  # a clock turns red when it gets this low
+NOTICE_MS = 4000  # how long a message (like "Game code copied") stays up
+# Where game codes go when there's no clipboard to copy them to (and are pasted from)
+CODE_PATH = os.path.join(os.path.expanduser("~"), ".micro_chess_code.txt")
 EVAL_BAR_DEPTH = 4  # how deep the search for the evaluation bar looks (as deep as Medium)
 EVAL_BAR = pygame.Rect(BOARD_X + BOARD_AREA_WIDTH + 5, BOARD_Y, 10, BOARD_AREA_HEIGHT)  # between board and panel
 REVIEW_DEPTH = 4  # how deep game review searches to judge each move
@@ -115,6 +118,29 @@ MARK_COLORS = {"?": pygame.Color("#f0b25a"), "??": CHECK_TEXT}
 BETTER_ARROW = (60, 175, 85, 170)  # in review, the move that would have been better
 MOVE_LINE_HEIGHT = 26  # the move list's rows
 REVIEW_LABELS = {"first": "|<", "back": "<", "forward": ">", "last": ">|", "done": "Done"}
+
+
+def copy_text(text):
+    """Put text on the clipboard. Returns False if there's no clipboard to put it on."""
+    try:
+        if not pygame.scrap.get_init():
+            pygame.scrap.init()
+        pygame.scrap.put(pygame.SCRAP_TEXT, text.encode("utf-8"))
+        return True
+    except pygame.error:
+        return False
+
+
+def pasted_text():
+    """The text on the clipboard, or None if it's empty or there's no clipboard"""
+    try:
+        if not pygame.scrap.get_init():
+            pygame.scrap.init()
+        data = pygame.scrap.get(pygame.SCRAP_TEXT)
+    except pygame.error:
+        return None
+    text = data.decode("utf-8", errors="replace").replace("\x00", "").strip() if data else ""
+    return text or None
 
 
 def load_piece_images(size):
@@ -241,6 +267,8 @@ class ChessGUI:
         self.confirming_quit = False  # the "Quit the game?" dialog is open
         self.in_settings = False  # the settings screen is open (over the menu or the game)
         self.in_menu = True
+        self.notice = None  # (message, time it goes away) shown at the top of the window
+        self.start_code = None  # a position code to start games from, instead of the board's usual start
         self.new_game()
 
     # ---- game state -------------------------------------------------------
@@ -248,6 +276,7 @@ class ChessGUI:
     def start_game(self):
         """Leave the start menu and play with the chosen settings"""
         self.in_menu = False
+        self.start_code = None
         self.save_settings()
         self.new_game()
 
@@ -314,7 +343,11 @@ class ChessGUI:
         self.cancel_search()
 
     def new_game(self):
-        self.gs = GameState(variant=VARIANTS[self.variant_key])
+        if self.start_code:
+            self.gs = GameState.from_code(self.start_code)
+        else:
+            self.gs = GameState(variant=VARIANTS[self.variant_key])
+        self.start_state = copy.deepcopy(self.gs)  # for the game code
         self.layout_board()
         self.move_log = []  # every move played, so U can take moves back
         self.move_texts = []  # the same moves as written in the move list, e.g. "d2-d3+"
@@ -369,6 +402,60 @@ class ChessGUI:
             self.eval_score, self.eval_line = analyse_position(self.board_view()[0], EVAL_BAR_DEPTH)
         else:
             self.eval_score, self.eval_line = None, []
+
+    def show_notice(self, message):
+        self.notice = (message, pygame.time.get_ticks() + NOTICE_MS)
+
+    def game_code(self):
+        """This game as text: the position it started from and the moves played since"""
+        return write_game_code(self.start_state, self.move_log)
+
+    def copy_game_code(self):
+        """Ctrl+C (Cmd+C on a Mac): copy the game code, or save it to a file if there's no clipboard"""
+        code = self.game_code()
+        if copy_text(code):
+            self.show_notice("Game code copied")
+            return
+        try:
+            with open(CODE_PATH, "w") as file:
+                file.write(code + "\n")
+            self.show_notice(f"No clipboard: saved the game code to {CODE_PATH.replace(os.path.expanduser('~'), '~')}")
+        except OSError:
+            self.show_notice("Couldn't copy the game code")
+
+    def paste_game_code(self):
+        """Ctrl+V (Cmd+V): play on from a game code on the clipboard (or in the file that copying
+        saves to when there's no clipboard)"""
+        text = pasted_text()
+        if text is None:
+            try:
+                with open(CODE_PATH) as file:
+                    text = file.read().strip()
+            except OSError:
+                text = ""
+        if not text:
+            self.show_notice("Nothing to paste: copy a game code first")
+            return
+        try:
+            start, moves = read_game_code(text)
+        except ValueError as problem:
+            self.show_notice(f"That isn't a game code: {problem}")
+            return
+        self.load_game(start.to_code(), moves)
+        self.show_notice("Game loaded")
+
+    def load_game(self, start_code, moves):
+        """Start a game from a position code, then play the moves (quickly and silently)"""
+        self.start_code = start_code
+        self.in_menu = self.in_settings = False
+        self.new_game()
+        for move in moves:
+            self.gs.make_move(move)
+            self.move_log.append(move)
+            check = self.gs.in_check()
+            mated = check and not self.gs.get_valid_moves()
+            self.move_texts.append(move_notation(move, self.gs.rows) + ("#" if mated else "+" if check else ""))
+        self.refresh()
 
     def play(self, move, animate=True):
         self.gs.make_move(move)
@@ -595,7 +682,12 @@ class ChessGUI:
         elif self.in_settings:
             self.handle_settings_event(event)
         elif event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_ESCAPE and self.review_index is not None:
+            command = getattr(event, "mod", 0) & (pygame.KMOD_CTRL | pygame.KMOD_META)  # Ctrl, or Cmd on a Mac
+            if command and event.key == pygame.K_c and not self.in_menu:
+                self.copy_game_code()
+            elif command and event.key == pygame.K_v:
+                self.paste_game_code()
+            elif event.key == pygame.K_ESCAPE and self.review_index is not None:
                 self.stop_review()
             elif event.key == pygame.K_ESCAPE:
                 self.ask_to_quit()
@@ -920,10 +1012,23 @@ class ChessGUI:
         self.screen.fill(BACKGROUND)
         if self.in_settings:
             self.draw_settings()
-            return
-        if self.in_menu:
+        elif self.in_menu:
             self.draw_menu()
-            return
+        else:
+            self.draw_game()
+        if self.notice and pygame.time.get_ticks() < self.notice[1]:
+            self.draw_notice(self.notice[0])
+
+    def draw_notice(self, message):
+        """A short message in a dark box at the top of the window"""
+        label = self.small_font.render(message, True, TEXT)
+        box = label.get_rect(midtop=(WIDTH // 2, 6)).inflate(20, 12)
+        box.top = 4
+        pygame.draw.rect(self.screen, STATUS_BACKGROUND, box, border_radius=8)
+        pygame.draw.rect(self.screen, MUTED_TEXT, box, 1, border_radius=8)
+        self.screen.blit(label, label.get_rect(center=box.center))
+
+    def draw_game(self):
         self.draw_board()
         if self.settings["coordinates"]:
             self.draw_coordinates()

@@ -22,8 +22,50 @@ CASTLING_SQUARES = {
     "black": ((0, 0), (0, 2), (0, 3), (0, 1)),  # King a5-c5, Rook d5-b5
 }
 
-# The letters used to write starting positions
+# The letters used to write positions: uppercase for White, lowercase for Black
 PIECE_LETTERS = {"k": "king", "r": "rook", "b": "bishop", "n": "knight", "p": "pawn"}
+KIND_LETTERS = {kind: letter for letter, kind in PIECE_LETTERS.items()}
+FILES = "abcdef"
+CUSTOM_SIZES = ((4, 4), (5, 4), (5, 5))  # (rows, columns) of the boards the board editor makes
+
+
+def board_from_ranks(ranks):
+    """The board written as ranks of letters, top (Black's side) first: "k", "P", "." for an
+    empty square and "#" for a hole. Raises ValueError for a letter it doesn't know."""
+    board = []
+    for rank in ranks:
+        row = []
+        for letter in rank:
+            if letter == ".":
+                row.append(EMPTY)
+            elif letter == "#":
+                row.append(HOLE)
+            elif letter.lower() in PIECE_LETTERS:
+                color = "white" if letter.isupper() else "black"
+                row.append(f"{color}_{PIECE_LETTERS[letter.lower()]}")
+            else:
+                raise ValueError(f"Unknown letter {letter!r} on the board")
+        board.append(row)
+    return board
+
+
+def square_letter(piece):
+    """The letter for a square: "K" for White's king, "p" for Black's pawn, "." when empty, "#" for a hole"""
+    if piece in (EMPTY, HOLE):
+        return "." if piece == EMPTY else "#"
+    color, kind = piece.split("_")
+    return KIND_LETTERS[kind].upper() if color == "white" else KIND_LETTERS[kind]
+
+
+def square_code(r, c, rows):
+    """A square's name on a board with this many rows, e.g. "a1" """
+    return f"{FILES[c]}{rows - r}"
+
+
+def move_code(move, rows):
+    """A move as written in a game code: its two squares, plus the promotion's letter: "c1b3", "c4c5r" """
+    text = square_code(move.start_row, move.start_col, rows) + square_code(move.end_row, move.end_col, rows)
+    return text + KIND_LETTERS[move.promotion_piece] if move.is_promotion else text
 
 
 @dataclass(frozen=True, eq=False)
@@ -46,19 +88,7 @@ class Variant:
     same_color_bishops_draw: bool = True
 
     def start_board(self):
-        board = []
-        for rank in self.layout:
-            row = []
-            for letter in rank:
-                if letter == ".":
-                    row.append(EMPTY)
-                elif letter == "#":
-                    row.append(HOLE)
-                else:
-                    color = "white" if letter.isupper() else "black"
-                    row.append(f"{color}_{PIECE_LETTERS[letter.lower()]}")
-            board.append(row)
-        return board
+        return board_from_ranks(self.layout)
 
 
 MICRO = Variant(
@@ -98,6 +128,15 @@ PILLARS = Variant(
 VARIANTS = {variant.key: variant for variant in (MICRO, TINY, DONUT, PILLARS)}
 
 
+def custom_variant(layout):
+    """The game mode for a board made in the board editor (or read from a code). It has no
+    castling. The can't-checkmate draws only apply when the board has no holes: on the plain
+    4x4, 4x5 and 5x5 boards no such mate exists, but a hole can make one possible."""
+    plain = not any("#" in rank for rank in layout)
+    return Variant(key="custom", name="Custom", description=f"{len(layout[0])}x{len(layout)} board",
+                   layout=tuple(layout), lone_knight_draws=plain, same_color_bishops_draw=plain)
+
+
 class GameState:
     def __init__(self, board=None, white_to_move=True, variant=MICRO):
         """Start a new game, or set up a custom position by passing a board.
@@ -126,6 +165,74 @@ class GameState:
     def position_key(self):
         """A snapshot of the position: where every piece is, whose turn it is and who may castle"""
         return tuple(tuple(row) for row in self.board), self.white_to_move, self.castling_rights
+
+    def to_code(self):
+        """The position as a line of text: the board's name, the ranks from the top down
+        (letters as in the Variant layouts), the side to move and who may castle.
+        For example "micro knbr/p.../..../...P/RBNK w WB"."""
+        ranks = "/".join("".join(square_letter(piece) for piece in row) for row in self.board)
+        castling = ("W" if "white" in self.castling_rights else "") + ("B" if "black" in self.castling_rights else "")
+        return f"{self.variant.key} {ranks} {'w' if self.white_to_move else 'b'} {castling or '-'}"
+
+    @classmethod
+    def from_code(cls, code):
+        """The position a code describes (see to_code). Raises ValueError saying what's wrong
+        with a code that doesn't describe a position that can be played."""
+        parts = code.split()
+        if len(parts) != 4:
+            raise ValueError("A position code has four parts: board, ranks, side to move and castling")
+        key, ranks, side, castling = parts
+        ranks = ranks.split("/")
+        if len({len(rank) for rank in ranks}) != 1:
+            raise ValueError("Every rank needs the same number of squares")
+        board = board_from_ranks(ranks)
+        holes = [[square == HOLE for square in row] for row in board]
+        if key == "custom":
+            if (len(ranks), len(ranks[0])) not in CUSTOM_SIZES:
+                raise ValueError("Custom boards are 4x4, 4x5 or 5x5")
+            variant = custom_variant(ranks)
+        elif key in VARIANTS:
+            variant = VARIANTS[key]
+            if holes != [[square == HOLE for square in row] for row in variant.start_board()]:
+                raise ValueError(f"That isn't the shape of the {variant.name} board")
+        else:
+            raise ValueError(f"Unknown board {key!r}")
+        if side not in ("w", "b"):
+            raise ValueError("The side to move is w or b")
+        if castling not in ("-", "W", "B", "WB"):
+            raise ValueError("Castling is WB, W, B or -")
+
+        game = cls(board, side == "w", variant)
+        problem = game.position_problem()
+        if problem:
+            raise ValueError(problem)
+        rights = frozenset(color for color, letter in (("white", "W"), ("black", "B")) if letter in castling)
+        if not rights <= game.castling_rights:
+            raise ValueError("A side can't castle once its king or rook has left its corner")
+        game.castling_rights = rights
+        game.position_history = [game.position_key()]
+        return game
+
+    def position_problem(self):
+        """Why this position can't be played, or None if it can: each side needs exactly one
+        king, a pawn can't stand on the rank where it would promote, and the side that has
+        just moved can't be in check"""
+        for color in ("white", "black"):
+            if sum(row.count(f"{color}_king") for row in self.board) != 1:
+                return f"{color.title()} needs exactly one king"
+        if "white_pawn" in self.board[0] or "black_pawn" in self.board[-1]:
+            return "A pawn can't stand on the last rank, where it would promote"
+        if self.is_king_attacked(white=not self.white_to_move):
+            waiting, moving = ("Black", "White") if self.white_to_move else ("White", "Black")
+            return f"{waiting} is in check, but it's {moving}'s move"
+        return None
+
+    def move_from_code(self, text):
+        """The legal move a game code writes as text (e.g. "c1b3" or "c4c5r"); ValueError if there's none"""
+        for move in self.get_valid_moves():
+            if move_code(move, self.rows) == text:
+                return move
+        raise ValueError(f"{text} isn't a legal move there")
 
     def find_piece(self, piece):
         for r in range(self.rows):
@@ -432,3 +539,22 @@ class Move:
         return (self.start_row, self.start_col, self.end_row, self.end_col, self.promotion_piece) == \
                (other.start_row, other.start_col, other.end_row, other.end_col, other.promotion_piece)
  
+
+
+def read_game_code(code):
+    """(start position, moves played) from a game code: a position code followed by the
+    moves, e.g. "micro knbr/p.../..../...P/RBNK w WB c1b3 a5b4". Raises ValueError if
+    the code is wrong or a move isn't legal."""
+    parts = code.split()
+    start, game = GameState.from_code(" ".join(parts[:4])), GameState.from_code(" ".join(parts[:4]))
+    moves = []
+    for text in parts[4:]:
+        move = game.move_from_code(text)
+        game.make_move(move)
+        moves.append(move)
+    return start, moves
+
+
+def write_game_code(start, moves):
+    """The game code for the moves played from a start position"""
+    return " ".join([start.to_code()] + [move_code(move, start.rows) for move in moves])

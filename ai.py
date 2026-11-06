@@ -188,14 +188,15 @@ class EvaluationTables:
         return (middlegame * phase + endgame * (self.max_phase - phase)) // self.max_phase
 
 
-EVALUATION_TABLES = {}  # game mode key -> EvaluationTables
+EVALUATION_TABLES = {}  # (game mode key, layout) -> EvaluationTables; custom boards differ in their layout
 
 
 def tables_for(game_state):
     variant = game_state.variant
-    if variant.key not in EVALUATION_TABLES:
-        EVALUATION_TABLES[variant.key] = EvaluationTables(variant)
-    return EVALUATION_TABLES[variant.key]
+    cache_key = (variant.key, variant.layout)
+    if cache_key not in EVALUATION_TABLES:
+        EVALUATION_TABLES[cache_key] = EvaluationTables(variant)
+    return EVALUATION_TABLES[cache_key]
 
 
 class Search:

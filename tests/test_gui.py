@@ -16,8 +16,9 @@ from helpers import position, square, find_move  # noqa: E402
 def menu(monkeypatch, tmp_path):
     # Moves appear at once, so tests don't have to wait for pieces to slide
     monkeypatch.setattr(gui, "ANIMATION_MS", 0)
-    # Settings are saved in a temporary folder, never the real home folder
+    # Settings (and copied game codes) are saved in a temporary folder, never the real home folder
     monkeypatch.setattr(settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setattr(gui, "CODE_PATH", str(tmp_path / "code.txt"))
     app = gui.ChessGUI()
     yield app
     pygame.quit()
@@ -817,6 +818,67 @@ def test_undo_after_the_game_ends_stops_the_review(app):
     app.start_review()
     press(app, pygame.K_u)
     assert app.review_index is None and app.review_marks == [] and app.result is None
+
+
+def command_key(app, key):
+    """Ctrl (or Cmd) plus a key"""
+    app.handle_event(pygame.event.Event(pygame.KEYDOWN, key=key, mod=pygame.KMOD_CTRL))
+
+
+def play_moves(app, *moves):
+    for start, end in moves:
+        click(app, start)
+        click(app, end)
+
+
+def test_copy_and_paste_a_game_without_a_clipboard(menu):
+    # The test window has no clipboard, so the code goes to a file and is read back from it
+    menu.two_players = True
+    menu.start_game()
+    play_moves(menu, ("d2", "d3"), ("b5", "c3"))
+    command_key(menu, pygame.K_c)
+    assert "saved the game code" in menu.notice[0]
+    with open(gui.CODE_PATH) as file:
+        assert file.read().strip() == "micro knbr/p.../..../...P/RBNK w WB d2d3 b5c3"
+    press(menu, pygame.K_r)
+    command_key(menu, pygame.K_v)
+    assert menu.move_texts == ["d2-d3", "b5-c3+"] and menu.notice[0] == "Game loaded"
+    menu.draw()
+
+
+def test_copy_and_paste_with_a_clipboard(app, monkeypatch):
+    clipboard = []
+    monkeypatch.setattr(gui, "copy_text", lambda text: clipboard.append(text) or True)
+    monkeypatch.setattr(gui, "pasted_text", lambda: clipboard[-1])
+    click(app, "a1")
+    click(app, "a4")
+    command_key(app, pygame.K_c)
+    assert app.notice[0] == "Game code copied" and clipboard == [app.game_code()]
+    app.new_game()
+    command_key(app, pygame.K_v)
+    assert app.move_texts == ["a1xa4+"]
+
+
+def test_pasting_something_else_shows_a_message(app, monkeypatch):
+    click(app, "a1")
+    click(app, "a4")
+    for text in ("hello there", "micro knbr/p.../..../...P/RBNK w WB c1c4", "custom k./.K w -"):
+        monkeypatch.setattr(gui, "pasted_text", lambda: text)
+        command_key(app, pygame.K_v)
+        assert app.notice[0].startswith("That isn't a game code") and app.move_texts == ["a1xa4+"]
+    monkeypatch.setattr(gui, "pasted_text", lambda: None)
+    command_key(app, pygame.K_v)  # nothing on the clipboard and no file
+    assert app.notice[0].startswith("Nothing to paste")
+    app.draw()
+
+
+def test_pasting_on_the_menu_starts_the_game(menu, monkeypatch):
+    monkeypatch.setattr(gui, "pasted_text", lambda: "donut rn.bk/pp.../..#../...PP/KB.NR b - ")
+    command_key(menu, pygame.K_v)
+    assert not menu.in_menu and menu.gs.variant.key == "donut" and not menu.gs.white_to_move
+    press(menu, pygame.K_r)  # restarting goes back to the pasted position
+    assert not menu.gs.white_to_move and menu.move_log == []
+    menu.draw()
 
 
 def test_drag_a_piece_to_move_it(app, monkeypatch):
