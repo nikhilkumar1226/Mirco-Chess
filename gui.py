@@ -14,6 +14,7 @@ import traceback
 import pygame
 
 import settings
+import stats
 from ai import get_ai_move, search_move, position_score, analyse_position, move_mates_within, MATE_SCORE
 from chess_engine import (GameState, ROWS, EMPTY, HOLE, VARIANTS, read_game_code, write_game_code,
                           square_letter)
@@ -76,7 +77,8 @@ MENU_CHOICES = [
 MENU_WIDTH = 400
 ICON_SQUARE = 6  # the size of a square in the little pictures of the boards on the menu
 MENU_SETTINGS = ("variant_key", "two_players", "human_is_white", "difficulty")  # remembered for next time
-MENU_PAGES = [("Puzzles", "puzzles"), ("Editor", "editor"), ("Settings", "settings")]  # above Start game
+# The buttons above Start game
+MENU_PAGES = [("Puzzles", "puzzles"), ("Editor", "editor"), ("Stats", "stats"), ("Settings", "settings")]
 
 # The board editor: its board sizes as (label, (rows, columns)), the pieces it can place, and
 # how many boards it remembers
@@ -308,6 +310,8 @@ class ChessGUI:
         self.in_menu = True
         self.notice = None  # (message, time it goes away) shown at the top of the window
         self.start_code = None  # a position code to start games from, instead of the board's usual start
+        self.stats = stats.load()
+        self.in_stats = False  # the stats screen is open (over the start menu)
         self.puzzles = load_puzzles()
         self.puzzle_index = None  # which puzzle is being solved, or None in an ordinary game
         # The board editor (it opens from the start menu, which stays underneath it)
@@ -371,6 +375,7 @@ class ChessGUI:
             self.result = "time_draw" if has_only_king(self.gs.board, other) else "time"
             self.selected = self.dragging = self.promotion_choices = self.hint = None
             self.cancel_search()
+            self.record_result()
 
     def toggle_setting(self, name):
         self.settings[name] = not self.settings[name]
@@ -399,6 +404,7 @@ class ChessGUI:
         if self.puzzle_index is not None:
             self.puzzle_white = self.gs.white_to_move  # the solver plays the side to move
             self.puzzle_moves_left = self.puzzles[self.puzzle_index]["mate_in"]
+        self.game_recorded = False  # whether this game's result has gone into the stats
         self.puzzle_status = None  # "solved", "failed" or "solution" once the puzzle is over
         self.puzzle_reply = None  # the computer's defence, played once the solver's move has slid into place
         self.layout_board()
@@ -534,6 +540,23 @@ class ChessGUI:
         self.move_texts.append(move_notation(move, self.gs.rows) + suffix)
         if solving:
             self.judge_puzzle_move(forces_mate)
+        self.record_result()
+
+    def record_result(self):
+        """Count a finished game against the computer in the stats, once. Only games from a board's
+        usual start count: a position set up in the editor (or pasted in) could be a sure win."""
+        if (self.result is None or self.game_recorded or self.two_players or self.puzzle_index is not None
+                or self.start_code is not None):
+            return
+        self.game_recorded = True
+        if self.result in ("checkmate", "time"):
+            outcome = "loss" if self.gs.white_to_move == self.human_is_white else "win"  # the side to move lost
+        else:
+            outcome = "draw"
+        before = self.stats["rating"]
+        stats.record(self.stats, self.variant_key, self.difficulty, outcome)
+        stats.save(self.stats)
+        self.show_notice(f"{outcome.title()}: rating {self.stats['rating']} ({self.stats['rating'] - before:+d})")
 
     def undo(self):
         """Take back your last move and the AI's reply to it (one move in a 2-player game)"""
@@ -652,6 +675,9 @@ class ChessGUI:
 
     def open_editor(self):
         self.in_editor = True
+
+    def open_stats(self):
+        self.in_stats = True
 
     def resize_editor(self, rows, cols):
         """An empty board of this size in the editor"""
@@ -907,6 +933,10 @@ class ChessGUI:
             self.handle_settings_event(event)
         elif self.in_editor:
             self.handle_editor_event(event)
+        elif self.in_stats:
+            if (event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_RETURN)) or \
+                    (event.type == pygame.MOUSEBUTTONDOWN and self.done_button_rect().collidepoint(event.pos)):
+                self.in_stats = False
         elif event.type == pygame.KEYDOWN:
             command = getattr(event, "mod", 0) & (pygame.KMOD_CTRL | pygame.KMOD_META)  # Ctrl, or Cmd on a Mac
             if command and event.key == pygame.K_c and not self.in_menu:
@@ -996,7 +1026,8 @@ class ChessGUI:
             self.start_game()
         for rect, _, page in self.menu_page_buttons():
             if rect.collidepoint(pos) and self.menu_page_enabled(page):
-                {"puzzles": self.open_puzzles, "editor": self.open_editor, "settings": self.open_settings}[page]()
+                {"puzzles": self.open_puzzles, "editor": self.open_editor, "stats": self.open_stats,
+                 "settings": self.open_settings}[page]()
 
     def handle_click(self, pos):
         if self.gear_button_rect().collidepoint(pos):
@@ -1307,6 +1338,8 @@ class ChessGUI:
             self.draw_settings()
         elif self.in_editor:
             self.draw_editor()
+        elif self.in_stats:
+            self.draw_stats()
         elif self.in_menu:
             self.draw_menu()
         else:
@@ -1384,6 +1417,42 @@ class ChessGUI:
         pygame.draw.rect(self.screen, BUTTON_HOVER if button.collidepoint(mouse) else BUTTON, button,
                          border_radius=12)
         label = self.font.render("Start game", True, TEXT)
+        self.screen.blit(label, label.get_rect(center=button.center))
+
+    def draw_stats(self):
+        """The rating, and wins-draws-losses against the computer on each board at each level"""
+        title = self.title_font.render("Stats", True, TEXT)
+        self.screen.blit(title, title.get_rect(center=(WIDTH // 2, 48)))
+        rating = self.big_font.render(f"Rating {self.stats['rating']}", True, TEXT)
+        self.screen.blit(rating, rating.get_rect(center=(WIDTH // 2, 104)))
+        levels = "   ".join(f"{level.title()} {stats.LEVEL_RATINGS[level]}" for level in stats.LEVEL_RATINGS)
+        about = self.small_font.render(f"The computer's ratings: {levels}", True, MUTED_TEXT)
+        self.screen.blit(about, about.get_rect(center=(WIDTH // 2, 136)))
+
+        left = (WIDTH - MENU_WIDTH) // 2
+        columns = [left + 120 + i * 94 for i in range(3)]  # the centers of the Easy, Medium and Hard columns
+        for x, level in zip(columns, stats.LEVEL_RATINGS):
+            label = self.small_font.render(level.upper(), True, MUTED_TEXT)
+            self.screen.blit(label, label.get_rect(center=(x + 40, 172)))
+        rows = [(variant.name, key) for key, variant in VARIANTS.items()]
+        for i, (name, key) in enumerate(rows):
+            y = 200 + i * 40
+            pygame.draw.rect(self.screen, CHOICE, (left, y - 15, MENU_WIDTH, 32), border_radius=8)
+            self.screen.blit(self.font.render(name, True, TEXT), (left + 14, y - 9))
+            for x, level in zip(columns, stats.LEVEL_RATINGS):
+                wins, draws, losses = stats.counts_for(self.stats, key, level)
+                color = TEXT if wins + draws + losses else DISABLED_TEXT
+                cell = self.font.render(f"{wins}-{draws}-{losses}", True, color)
+                self.screen.blit(cell, cell.get_rect(center=(x + 40, y + 1)))
+        note = self.small_font.render("Wins-draws-losses against the computer, from each board's usual start",
+                                      True, MUTED_TEXT)
+        self.screen.blit(note, note.get_rect(center=(WIDTH // 2, 200 + len(rows) * 40)))
+
+        button = self.done_button_rect()
+        mouse = pygame.mouse.get_pos()
+        pygame.draw.rect(self.screen, BUTTON_HOVER if button.collidepoint(mouse) else BUTTON, button,
+                         border_radius=12)
+        label = self.font.render("Done", True, TEXT)
         self.screen.blit(label, label.get_rect(center=button.center))
 
     def draw_editor(self):
