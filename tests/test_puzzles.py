@@ -10,7 +10,6 @@ pygame = pytest.importorskip("pygame")
 
 import ai  # noqa: E402
 import gui  # noqa: E402
-import settings  # noqa: E402
 from chess_engine import GameState, VARIANTS, PILLARS, read_game_code, move_code  # noqa: E402
 from helpers import position, square  # noqa: E402
 
@@ -61,15 +60,6 @@ def test_damaged_puzzle_files_give_no_puzzles(tmp_path):
 
 
 # ---- in the window ------------------------------------------------------------
-
-@pytest.fixture
-def menu(monkeypatch, tmp_path):
-    monkeypatch.setattr(gui, "ANIMATION_MS", 0)
-    monkeypatch.setattr(settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
-    app = gui.ChessGUI()
-    yield app
-    pygame.quit()
-
 
 def click_square(app, name):
     pos = app.square_rect(*square(name, app.gs.rows)).center

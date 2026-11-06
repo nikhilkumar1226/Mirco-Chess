@@ -28,6 +28,7 @@ DEFAULTS = {
     "clock": 0,  # minutes on each player's clock, or 0 for no clock
     # Remembered as you play
     "solved_puzzles": [],  # the ids of the puzzles solved so far
+    "custom_boards": [],  # position codes of the boards saved in the board editor
 }
 # Settings that can only take some values
 CHOICES = {

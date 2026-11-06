@@ -2,34 +2,13 @@ import os
 
 import pytest
 
-# Run without opening a window or playing sound
+# Run without opening a window or playing sound (conftest.py sets this up too)
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
 pygame = pytest.importorskip("pygame")
 
 import gui  # noqa: E402  (needs the environment variables above)
-import settings  # noqa: E402
 from helpers import position, square, find_move  # noqa: E402
-
-
-@pytest.fixture
-def menu(monkeypatch, tmp_path):
-    # Moves appear at once, so tests don't have to wait for pieces to slide
-    monkeypatch.setattr(gui, "ANIMATION_MS", 0)
-    # Settings (and copied game codes) are saved in a temporary folder, never the real home folder
-    monkeypatch.setattr(settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
-    monkeypatch.setattr(gui, "CODE_PATH", str(tmp_path / "code.txt"))
-    app = gui.ChessGUI()
-    yield app
-    pygame.quit()
-
-
-@pytest.fixture
-def app(menu):
-    """A game against the AI on Easy, playing White"""
-    menu.difficulty = "easy"
-    menu.start_game()
-    return menu
 
 
 def click_at(app, pos):

@@ -15,7 +15,8 @@ import pygame
 
 import settings
 from ai import get_ai_move, search_move, position_score, analyse_position, move_mates_within, MATE_SCORE
-from chess_engine import GameState, ROWS, EMPTY, HOLE, VARIANTS, read_game_code, write_game_code
+from chess_engine import (GameState, ROWS, EMPTY, HOLE, VARIANTS, read_game_code, write_game_code,
+                          square_letter)
 from sounds import Sounds
 
 # Layout, in pixels
@@ -75,7 +76,13 @@ MENU_CHOICES = [
 MENU_WIDTH = 400
 ICON_SQUARE = 6  # the size of a square in the little pictures of the boards on the menu
 MENU_SETTINGS = ("variant_key", "two_players", "human_is_white", "difficulty")  # remembered for next time
-MENU_PAGES = [("Puzzles", "puzzles"), ("Settings", "settings")]  # the buttons above Start game
+MENU_PAGES = [("Puzzles", "puzzles"), ("Editor", "editor"), ("Settings", "settings")]  # above Start game
+
+# The board editor: its board sizes as (label, (rows, columns)), the pieces it can place, and
+# how many boards it remembers
+EDITOR_SIZES = [("4x4", (4, 4)), ("4x5", (5, 4)), ("5x5", (5, 5))]
+EDITOR_PIECES = ("king", "rook", "bishop", "knight", "pawn")
+SAVED_BOARDS = 20
 
 # The settings screen: (label, setting) for each on/off switch
 SETTING_SWITCHES = [
@@ -158,6 +165,21 @@ def load_puzzles(path=None):
         return []
     return [puzzle for puzzle in puzzles
             if isinstance(puzzle, dict) and {"id", "code", "mate_in", "solution"} <= puzzle.keys()]
+
+
+def code_problem(code):
+    """Why a position code can't be played (see GameState.from_code), or None if it can"""
+    try:
+        GameState.from_code(code)
+    except ValueError as problem:
+        return str(problem)
+    return None
+
+
+def board_geometry(rows, cols):
+    """(square size, left, top) for a board of this size, as big as fits its space and centered in it"""
+    size = min(SQUARE_SIZE, BOARD_AREA_WIDTH // cols, BOARD_AREA_HEIGHT // rows)
+    return size, BOARD_X + (BOARD_AREA_WIDTH - cols * size) // 2, BOARD_Y + (BOARD_AREA_HEIGHT - rows * size) // 2
 
 
 def load_piece_images(size):
@@ -288,6 +310,12 @@ class ChessGUI:
         self.start_code = None  # a position code to start games from, instead of the board's usual start
         self.puzzles = load_puzzles()
         self.puzzle_index = None  # which puzzle is being solved, or None in an ordinary game
+        # The board editor (it opens from the start menu, which stays underneath it)
+        self.in_editor = False
+        self.editor_tool = "white_king"  # a piece, HOLE or EMPTY (the eraser)
+        self.editor_white_to_move = True
+        self.saved_board_index = -1  # which saved board "Saved boards" showed last
+        self.resize_editor(5, 4)
         self.new_game()
 
     # ---- game state -------------------------------------------------------
@@ -397,15 +425,9 @@ class ChessGUI:
 
     def layout_board(self):
         """Size the squares so this game's board fits its space, and make what's drawn on them"""
-        rows, cols = self.gs.rows, self.gs.cols
-        size = self.square_size = min(SQUARE_SIZE, BOARD_AREA_WIDTH // cols, BOARD_AREA_HEIGHT // rows)
-        # Centered in the space for the board
-        self.board_x = BOARD_X + (BOARD_AREA_WIDTH - cols * size) // 2
-        self.board_y = BOARD_Y + (BOARD_AREA_HEIGHT - rows * size) // 2
-        piece_size = size * 4 // 5
-        if piece_size not in self.piece_images:
-            self.piece_images[piece_size] = load_piece_images(piece_size)
-        self.images = self.piece_images[piece_size]
+        size, self.board_x, self.board_y = board_geometry(self.gs.rows, self.gs.cols)
+        self.square_size = size
+        self.images = self.images_for(size)
 
         self.last_move_overlay = translucent_square(LAST_MOVE, size)
         self.selected_overlay = translucent_square(SELECTED, size)
@@ -414,6 +436,13 @@ class ChessGUI:
         pygame.draw.circle(self.move_dot, MOVE_HINT, (size // 2, size // 2), size // 6)
         self.capture_ring = pygame.Surface((size, size), pygame.SRCALPHA)
         pygame.draw.circle(self.capture_ring, MOVE_HINT, (size // 2, size // 2), size // 2 - 2, size // 11)
+
+    def images_for(self, square_size):
+        """The piece images for squares of this size (loaded the first time they're needed)"""
+        piece_size = square_size * 4 // 5
+        if piece_size not in self.piece_images:
+            self.piece_images[piece_size] = load_piece_images(piece_size)
+        return self.piece_images[piece_size]
 
     def refresh(self):
         """Work out the legal moves and the game's status after the position changed"""
@@ -619,6 +648,100 @@ class ChessGUI:
                    "last": len(self.move_log)}
         self.show_review_position(targets[action])
 
+    # ---- board editor ---------------------------------------------------------
+
+    def open_editor(self):
+        self.in_editor = True
+
+    def resize_editor(self, rows, cols):
+        """An empty board of this size in the editor"""
+        self.editor_size = (rows, cols)
+        self.editor_board = [[EMPTY] * cols for _ in range(rows)]
+
+    def editor_code(self):
+        """The editor's position as a position code (a "custom" board, which never has castling)"""
+        ranks = "/".join("".join(square_letter(piece) for piece in row) for row in self.editor_board)
+        return f"custom {ranks} {'w' if self.editor_white_to_move else 'b'} -"
+
+    def editor_problem(self):
+        """Why the position in the editor can't be played yet, or None if it can"""
+        return code_problem(self.editor_code())
+
+    def play_editor_board(self, two_players):
+        """Play the editor's position, against the computer or a friend (once it's a position that can be played)"""
+        if self.editor_problem():
+            return
+        self.two_players = two_players
+        self.start_code = self.editor_code()
+        self.puzzle_index = None
+        self.in_editor = self.in_menu = False
+        self.new_game()
+
+    def save_editor_board(self):
+        if self.editor_problem():
+            return
+        boards = self.settings["custom_boards"]
+        code = self.editor_code()
+        if code in boards:
+            boards.remove(code)
+        boards.append(code)
+        del boards[:-SAVED_BOARDS]  # only the latest are kept
+        self.save_settings()
+        self.show_notice(f"Board saved ({len(boards)} saved)")
+
+    def load_saved_board(self):
+        """Put the next saved board on the editor (they take turns, each time this is pressed)"""
+        boards = [code for code in self.settings["custom_boards"] if code_problem(code) is None]
+        if not boards:
+            return
+        self.saved_board_index = (self.saved_board_index + 1) % len(boards)
+        game = GameState.from_code(boards[self.saved_board_index])
+        self.editor_size = (game.rows, game.cols)
+        self.editor_board = [row[:] for row in game.board]
+        self.editor_white_to_move = game.white_to_move
+        self.show_notice(f"Saved board {self.saved_board_index + 1} of {len(boards)}")
+
+    def handle_editor_event(self, event):
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+            self.in_editor = False  # back to the start menu
+        elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            self.handle_editor_click(event.pos)
+
+    def handle_editor_click(self, pos):
+        square = self.editor_square_at(pos)
+        if square is not None:
+            # Put the chosen piece (or a hole) there, or empty the square with the eraser
+            r, c = square
+            self.editor_board[r][c] = self.editor_tool
+            return
+        if self.editor_back_rect().collidepoint(pos):
+            self.in_editor = False
+            return
+        for rect, action, value, _ in self.editor_controls():
+            if not rect.collidepoint(pos) or not self.editor_control_enabled(action, value):
+                continue
+            if action == "size":
+                self.resize_editor(*value)
+            elif action == "clear":
+                self.resize_editor(*self.editor_size)
+            elif action in ("piece", "tool"):
+                self.editor_tool = value
+            elif action == "side":
+                self.editor_white_to_move = value
+            elif action == "save":
+                self.save_editor_board()
+            elif action == "saved":
+                self.load_saved_board()
+            elif action == "play":
+                self.play_editor_board(two_players=value)
+
+    def editor_control_enabled(self, action, value):
+        if action in ("play", "save"):
+            return self.editor_problem() is None
+        if action == "saved":
+            return bool(self.settings["custom_boards"])
+        return True
+
     # ---- puzzles ------------------------------------------------------------
 
     def open_puzzles(self):
@@ -782,6 +905,8 @@ class ChessGUI:
             self.handle_quit_dialog(event)
         elif self.in_settings:
             self.handle_settings_event(event)
+        elif self.in_editor:
+            self.handle_editor_event(event)
         elif event.type == pygame.KEYDOWN:
             command = getattr(event, "mod", 0) & (pygame.KMOD_CTRL | pygame.KMOD_META)  # Ctrl, or Cmd on a Mac
             if command and event.key == pygame.K_c and not self.in_menu:
@@ -871,7 +996,7 @@ class ChessGUI:
             self.start_game()
         for rect, _, page in self.menu_page_buttons():
             if rect.collidepoint(pos) and self.menu_page_enabled(page):
-                {"puzzles": self.open_puzzles, "settings": self.open_settings}[page]()
+                {"puzzles": self.open_puzzles, "editor": self.open_editor, "settings": self.open_settings}[page]()
 
     def handle_click(self, pos):
         if self.gear_button_rect().collidepoint(pos):
@@ -1113,6 +1238,46 @@ class ChessGUI:
     def start_button_rect(self):
         return pygame.Rect((WIDTH - MENU_WIDTH) // 2, 438, MENU_WIDTH, 46)
 
+    # ---- board editor geometry ----------------------------------------------
+
+    def editor_square_rect(self, r, c):
+        size, left, top = board_geometry(*self.editor_size)
+        return pygame.Rect(left + c * size, top + r * size, size, size)
+
+    def editor_square_at(self, pos):
+        """The (row, col) of the editor's board under a screen position, or None"""
+        size, left, top = board_geometry(*self.editor_size)
+        rows, cols = self.editor_size
+        if left <= pos[0] < left + cols * size and top <= pos[1] < top + rows * size:
+            return (pos[1] - top) // size, (pos[0] - left) // size
+        return None
+
+    def editor_controls(self):
+        """(rect, action, value, label) for every button on the editor's panel, top to bottom"""
+        left, width = SIDE_PANEL_X + 14, SIDE_PANEL_WIDTH - 28
+        controls = []
+
+        def row(y, height, items):
+            """[(action, value, label), ...] side by side across the panel"""
+            gap = 4
+            item_width = (width - gap * (len(items) - 1)) // len(items)
+            for i, (action, value, label) in enumerate(items):
+                controls.append((pygame.Rect(left + i * (item_width + gap), y, item_width, height), action, value, label))
+
+        row(BOARD_Y + 28, 28, [("size", size, label) for label, size in EDITOR_SIZES])
+        row(BOARD_Y + 86, 32, [("piece", f"white_{kind}", "") for kind in EDITOR_PIECES])
+        row(BOARD_Y + 120, 32, [("piece", f"black_{kind}", "") for kind in EDITOR_PIECES])
+        row(BOARD_Y + 158, 28, [("tool", HOLE, "Hole"), ("tool", EMPTY, "Eraser"), ("clear", None, "Clear")])
+        row(BOARD_Y + 216, 28, [("side", True, "White"), ("side", False, "Black")])
+        row(BOARD_Y + 254, 28, [("save", None, "Save"), ("saved", None, "Saved")])
+        row(BOARD_Y + 296, 32, [("play", False, "Play the computer")])
+        row(BOARD_Y + 334, 32, [("play", True, "Play a friend")])
+        return controls
+
+    def editor_back_rect(self):
+        """The Back button, at the right of the status bar"""
+        return pygame.Rect(WIDTH - 16 - 64, HEIGHT - STATUS_HEIGHT + 9, 64, 30)
+
     # ---- settings screen geometry -----------------------------------------
 
     def settings_rows(self):
@@ -1140,6 +1305,8 @@ class ChessGUI:
         self.screen.fill(BACKGROUND)
         if self.in_settings:
             self.draw_settings()
+        elif self.in_editor:
+            self.draw_editor()
         elif self.in_menu:
             self.draw_menu()
         else:
@@ -1218,6 +1385,57 @@ class ChessGUI:
                          border_radius=12)
         label = self.font.render("Start game", True, TEXT)
         self.screen.blit(label, label.get_rect(center=button.center))
+
+    def draw_editor(self):
+        """The board editor: the board on the left, the panel of pieces and buttons on the right"""
+        rows, cols = self.editor_size
+        size = board_geometry(rows, cols)[0]
+        images = self.images_for(size)
+        for r in range(rows):
+            for c in range(cols):
+                rect = self.editor_square_rect(r, c)
+                piece = self.editor_board[r][c]
+                if piece == HOLE:
+                    self.screen.fill(HOLE_COLOR, rect)
+                    pygame.draw.rect(self.screen, HOLE_EDGE, rect.inflate(-6, -6), 3, border_radius=4)
+                    continue
+                self.screen.fill(DARK_SQUARE if (r + c) % 2 == (rows - 1) % 2 else LIGHT_SQUARE, rect)
+                if piece != EMPTY:
+                    self.screen.blit(images[piece], images[piece].get_rect(center=rect.center))
+
+        area = pygame.Rect(SIDE_PANEL_X, BOARD_Y, SIDE_PANEL_WIDTH, BOARD_AREA_HEIGHT)
+        pygame.draw.rect(self.screen, SIDE_PANEL, area, border_radius=12)
+        for text, y in (("BOARD SIZE", 10), ("PIECES", 68), ("TO MOVE", 198)):
+            self.screen.blit(self.small_font.render(text, True, MUTED_TEXT), (area.x + 14, area.y + y))
+        mouse = pygame.mouse.get_pos()
+        for rect, action, value, label in self.editor_controls():
+            enabled = self.editor_control_enabled(action, value)
+            chosen = ((action == "size" and value == self.editor_size)
+                      or (action in ("piece", "tool") and value == self.editor_tool)
+                      or (action == "side" and value == self.editor_white_to_move))
+            if action == "play":
+                fill = (BUTTON_HOVER if rect.collidepoint(mouse) else BUTTON) if enabled else CHOICE
+            elif chosen:
+                fill = BUTTON
+            else:
+                fill = CHOICE_HOVER if enabled and rect.collidepoint(mouse) else CHOICE
+            pygame.draw.rect(self.screen, fill, rect, border_radius=6)
+            if action == "piece":
+                self.screen.blit(self.small_images[value], self.small_images[value].get_rect(center=rect.center))
+            else:
+                text = self.small_font.render(label, True, TEXT if enabled else DISABLED_TEXT)
+                self.screen.blit(text, text.get_rect(center=rect.center))
+
+        # The status bar says what's still wrong with the position, if anything
+        bar = pygame.Rect(0, HEIGHT - STATUS_HEIGHT, WIDTH, STATUS_HEIGHT)
+        self.screen.fill(STATUS_BACKGROUND, bar)
+        problem = self.editor_problem()
+        message = self.small_font.render(problem or "Ready to play", True, CHECK_TEXT if problem else TEXT)
+        self.screen.blit(message, message.get_rect(midleft=(16, bar.centery)))
+        back = self.editor_back_rect()
+        pygame.draw.rect(self.screen, CHOICE_HOVER if back.collidepoint(mouse) else CHOICE, back, border_radius=6)
+        label = self.small_font.render("Back", True, TEXT)
+        self.screen.blit(label, label.get_rect(center=back.center))
 
     def draw_settings(self):
         title = self.title_font.render("Settings", True, TEXT)
