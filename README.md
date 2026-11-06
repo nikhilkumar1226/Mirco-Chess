@@ -1,5 +1,9 @@
 # Micro Chess
 
+[![Tests](https://github.com/nikhilkumar1226/Mirco-Chess/actions/workflows/tests.yml/badge.svg)](https://github.com/nikhilkumar1226/Mirco-Chess/actions/workflows/tests.yml)
+
+**[Play in your browser](https://nikhilkumar1226.github.io/Mirco-Chess/)**: nothing to install.
+
 ![Micro Chess: a game in progress against the computer, with the evaluation bar and the line the computer expects beside the board, and the move list and captured pieces on the right](docs/screenshot.png)
 
 Chess on a 4×5 board, with a pygame interface and a computer opponent.
@@ -132,6 +136,22 @@ To keep the packages separate from the rest of your system, create a virtual env
 python3 -m venv .venv
 source .venv/bin/activate        # on Windows: .venv\Scripts\activate
 ```
+
+### Browser version
+
+The game also runs in a web page, built with [pygbag](https://pypi.org/project/pygbag/). Every push
+to `main` builds it and publishes it to GitHub Pages (the link at the top). In the browser the
+computer thinks for at most about a second per move, and your settings, stats and solved puzzles
+may not be kept between visits. To build it yourself:
+
+```bash
+python3 -m pip install pygbag
+python3 -m pygbag --build main.py      # the page ends up in build/web
+python3 -m pygbag main.py              # or build it and try it at http://localhost:8000
+```
+
+On a Mac, if pygbag seems to hang while downloading its page template, Python can't check web
+certificates yet: run **Install Certificates.command** in your Python folder in Applications.
 
 The terminal version doesn't need pygame:
 
@@ -331,6 +351,7 @@ Mirco-Chess/
 ├── images/               # piece images (60×60 PNG)
 ├── docs/screenshot.png   # the screenshot at the top of this page
 ├── tests/                # pytest tests
+├── .github/workflows/    # on GitHub: run the tests, and publish the browser version
 ├── requirements.txt      # pygame
 ├── requirements-dev.txt  # pygame and pytest
 └── pytest.ini
