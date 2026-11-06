@@ -699,6 +699,22 @@ def test_evaluation_bar_shows_a_forced_mate(app):
     assert set(bar_colors(app)) == {(240, 240, 235)}
 
 
+def test_evaluation_bar_shows_the_line_the_ai_expects(app):
+    app.toggle_setting("eval_bar")
+    assert len(app.eval_line) >= 3
+    assert len(gui.line_text(app.eval_line, app.gs.rows, 3).split()) == 3
+    app.draw()
+
+
+def test_line_text():
+    gs = gui.GameState()
+    line = [find_move(gs.get_valid_moves(), "d2", "d3")[0]]
+    gs.make_move(line[0])
+    line.append(find_move(gs.get_valid_moves(), "b5", "c3")[0])
+    assert gui.line_text(line, gs.rows) == "d2-d3 b5-c3"
+    assert gui.line_text(line, gs.rows, 1) == "d2-d3"
+
+
 def test_score_text():
     assert gui.score_text(0) == "0.0"
     assert gui.score_text(4) == "0.0"
@@ -730,7 +746,7 @@ def test_review_steps_through_a_finished_game(app):
     click_at(app, app.review_button_rect().center)
     assert app.review_index == 1
     finish_review(app)
-    assert app.review_marks == [("", None)]  # mating is never a mistake
+    assert app.review_marks == [("", [])]  # mating is never a mistake
     app.draw()
     press(app, pygame.K_LEFT)
     assert app.review_index == 0
@@ -772,13 +788,18 @@ def test_review_marks_a_blunder_and_shows_a_better_move(menu):
     click(menu, "a4")  # Ra1xa4+?? loses the rook to the king
     click(menu, "a5")
     click(menu, "a4")
-    mark, better = menu.judge_move(0)
+    mark, better_line = menu.judge_move(0)
+    better = better_line[0]
     assert mark == "??" and better in menu.position_after(0).get_valid_moves()
-    assert menu.judge_move(1) == ("", None)  # taking the rook was right
+    assert menu.judge_move(1) == ("", [])  # taking the rook was right
     menu.result = "repetition"
     menu.start_review(1)
     finish_review(menu)
     assert menu.better_move() == better
+    # The status bar names the better move and what the AI expects after it
+    expected = gui.line_text(better_line, menu.gs.rows, 3)
+    assert menu.review_status_text() == f"Move 1/2: a1xa4+?? better: {expected}"
+    assert len(expected.split()) == 3
     menu.draw()
 
 

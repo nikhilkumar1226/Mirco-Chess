@@ -208,6 +208,9 @@ class Search:
         self.nodes = 0
         self.deadline = deadline  # a time.perf_counter() time to stop at, or None for no limit
         self.stopped = False
+        # The line of play the search expects from the position it last finished at each ply:
+        # the best move found there, then the line it expects after that move
+        self.lines = {}
 
     def out_of_time(self):
         """True once the deadline has passed (the clock is checked every 256 positions)"""
@@ -222,6 +225,7 @@ class SearchResult:
     score: int  # its score, good for White when positive
     depth: int  # how many plies deep the deepest finished search went
     nodes: int  # how many positions the search looked at
+    line: list  # the moves the search expects to follow, starting with the chosen move
 
 
 def is_mate_score(score):
@@ -412,6 +416,7 @@ def minimax_alpha_beta(game_state, depth, alpha, beta, maximizing_player, ply=1,
     """
     if search is not None:
         search.nodes += 1
+        search.lines[ply] = []  # filled in below if this position is searched
         if search.out_of_time():
             return 0  # the answer is thrown away
     # Draws by repetition or insufficient material
@@ -432,6 +437,7 @@ def minimax_alpha_beta(game_state, depth, alpha, beta, maximizing_player, ply=1,
         score = from_table(stored_score, ply)
         if stored_depth == depth and (bound == EXACT or (bound == LOWER and score >= beta)
                                       or (bound == UPPER and score <= alpha)):
+            search.lines[ply] = [known_best]  # the line stops here: what follows wasn't stored
             return score
 
     window = (alpha, beta)
@@ -447,6 +453,8 @@ def minimax_alpha_beta(game_state, depth, alpha, beta, maximizing_player, ply=1,
 
         if (score > best) if maximizing_player else (score < best):
             best, best_move = score, move
+            if search is not None:
+                search.lines[ply] = [move] + search.lines.get(ply + 1, [])
         if maximizing_player:
             alpha = max(alpha, score)
         else:
@@ -480,6 +488,15 @@ def position_score(game_state, depth):
                               search=Search())
 
 
+def analyse_position(game_state, depth):
+    """(score, line): how good the position is for White, as position_score works it out, and
+    the moves the search expects to follow"""
+    search = Search()
+    score = minimax_alpha_beta(game_state, depth, float('-inf'), float('inf'), game_state.white_to_move,
+                               search=search)
+    return score, search.lines.get(1, [])
+
+
 def time_budget(difficulty, time_left=None):
     """How many seconds the AI may think: its level's time, and with a chess clock no more
     than a fair share of what's left on its clock"""
@@ -492,7 +509,7 @@ def time_budget(difficulty, time_left=None):
 def score_root_moves(game_state, moves, depth, margin, search):
     """Score each of the root moves with a search `depth` plies deep, or None if time ran out.
 
-    Returns ([(score, move), ...], best score).
+    Returns ([(score, move, expected line), ...], best score).
     """
     # White wants the highest score, Black the lowest
     ai_is_white = game_state.white_to_move
@@ -515,7 +532,7 @@ def score_root_moves(game_state, moves, depth, margin, search):
         if search.stopped:
             return None
 
-        scored_moves.append((score, move))
+        scored_moves.append((score, move, [move] + search.lines.get(2, [])))
         best_score = max(best_score, score) if ai_is_white else min(best_score, score)
     return scored_moves, best_score
 
@@ -568,8 +585,8 @@ def search_move(game_state, difficulty="medium", depth=None, rng=None, time_left
         scored_moves, best_score = result
         finished = (current_depth, scored_moves, best_score)
         # Next time, search the best moves first
-        moves = [move for _, move in sorted(scored_moves, key=lambda scored: scored[0],
-                                            reverse=game_state.white_to_move)]
+        moves = [move for _, move, _ in sorted(scored_moves, key=lambda scored: scored[0],
+                                               reverse=game_state.white_to_move)]
         if is_mate_score(best_score):
             break  # a deeper search could only find slower mates
 
@@ -577,9 +594,8 @@ def search_move(game_state, difficulty="medium", depth=None, rng=None, time_left
     if is_mate_score(best_score):
         margin = 0  # a mate is coming: take the quickest win, or put off the loss the longest
     # Pick at random between the moves within the margin (with no margin, the equally good ones)
-    move = rng.choice([move for score, move in scored_moves if abs(score - best_score) <= margin])
-    score = next(score for score, candidate in scored_moves if candidate is move)
-    return SearchResult(move, score, reached, search.nodes)
+    score, move, line = rng.choice([scored for scored in scored_moves if abs(scored[0] - best_score) <= margin])
+    return SearchResult(move, score, reached, search.nodes, line)
 
 
 def get_ai_move(game_state, difficulty="medium", depth=None, rng=None, time_left=None):

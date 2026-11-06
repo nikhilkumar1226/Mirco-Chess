@@ -1,3 +1,4 @@
+import copy
 import random
 import time
 
@@ -222,6 +223,30 @@ def test_a_mate_ends_the_search_at_once():
     gs = position({"a5": "black_king", "c4": "white_pawn", "b3": "white_king"})
     result = search_move(gs, "hard")
     assert is_move(result.move, "c4", "c5") and result.depth == 1 and result.score == MATE_SCORE - 2
+
+
+def play_line(gs, line):
+    """Play a line of moves on a copy of the game, checking each one is legal"""
+    gs = copy.deepcopy(gs)
+    for move in line:
+        assert move in gs.get_valid_moves()
+        gs.make_move(move)
+    return gs
+
+
+def test_the_expected_line_starts_with_the_chosen_move_and_can_be_played():
+    for variant in (MICRO, DONUT):
+        gs = GameState(variant=variant)
+        result = search_move(gs, depth=4, rng=random.Random(1))
+        assert result.line[0] == result.move and len(result.line) >= 2
+        play_line(gs, result.line)
+
+
+def test_the_expected_line_of_a_mate_ends_in_checkmate():
+    gs = position({"a5": "black_king", "c4": "white_pawn", "b3": "white_king"})
+    score, line = ai.analyse_position(gs, 4)
+    assert score == MATE_SCORE - 2 and len(line) == 1
+    assert play_line(gs, line).get_game_result() == "checkmate"
 
 
 def turned_around(gs):

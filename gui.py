@@ -13,7 +13,7 @@ import traceback
 import pygame
 
 import settings
-from ai import get_ai_move, position_score, MATE_SCORE
+from ai import get_ai_move, search_move, position_score, analyse_position, MATE_SCORE
 from chess_engine import GameState, ROWS, EMPTY, HOLE, VARIANTS
 from sounds import Sounds
 
@@ -162,6 +162,11 @@ def score_text(score):
     if round(score / 100, 1) == 0:
         return "0.0"
     return f"{score / 100:+.1f}"
+
+
+def line_text(line, rows, count=4):
+    """The first few moves of a line of play, written as in the move list: "b5-c3 d1-c1 a4-a3" """
+    return " ".join(move_notation(move, rows) for move in line[:count])
 
 
 def white_share(score):
@@ -358,11 +363,12 @@ class ChessGUI:
         self.update_eval()
 
     def update_eval(self):
-        """The score for the evaluation bar (None while the bar is switched off)"""
+        """The score for the evaluation bar and the line of play the AI expects
+        (None and an empty line while the bar is switched off)"""
         if self.settings["eval_bar"]:
-            self.eval_score = position_score(self.board_view()[0], EVAL_BAR_DEPTH)
+            self.eval_score, self.eval_line = analyse_position(self.board_view()[0], EVAL_BAR_DEPTH)
         else:
-            self.eval_score = None
+            self.eval_score, self.eval_line = None, []
 
     def play(self, move, animate=True):
         self.gs.make_move(move)
@@ -460,8 +466,9 @@ class ChessGUI:
         return gs
 
     def judge_move(self, i):
-        """How the i-th move (from 0) did: ("??", better move) if it threw away a lot,
-        ("?", better move) if it threw away a fair amount, otherwise ("", None).
+        """How the i-th move (from 0) did: ("??", better line) if it threw away a lot,
+        ("?", better line) if it threw away a fair amount, otherwise ("", []). The better
+        line is the move that should have been played, then the moves the AI expects after it.
 
         A search scores the position before the move (with the best reply to everything)
         and after it; the difference is what the move gave away.
@@ -474,9 +481,9 @@ class ChessGUI:
         gs.undo_move(self.move_log[i])
         lost = best - played if white else played - best
         if lost < MISTAKE:
-            return "", None
-        better = get_ai_move(gs, depth=REVIEW_DEPTH, rng=random.Random(0))
-        return ("??" if lost >= BLUNDER else "?"), better
+            return "", []
+        better = search_move(gs, depth=REVIEW_DEPTH, rng=random.Random(0))
+        return ("??" if lost >= BLUNDER else "?"), better.line
 
     def review_step(self, action):
         """Move through the review: "first", "back", "forward" or "last" (or "done" to stop)"""
@@ -1088,7 +1095,8 @@ class ChessGUI:
     def better_move(self):
         """While reviewing a move that was marked as a mistake, the move that would have been better"""
         if self.review_index and self.review_index <= len(self.review_marks):
-            return self.review_marks[self.review_index - 1][1]
+            line = self.review_marks[self.review_index - 1][1]
+            return line[0] if line else None
         return None
 
     def draw_arrow(self, move, color):
@@ -1116,6 +1124,13 @@ class ChessGUI:
         pygame.draw.rect(self.screen, MUTED_TEXT, EVAL_BAR, 1)
         label = self.small_font.render(score_text(self.eval_score), True, MUTED_TEXT)
         self.screen.blit(label, label.get_rect(center=(EVAL_BAR.centerx, EVAL_BAR.bottom + 16)))
+        # Beside the score, under the side panel: the line the AI expects, as many moves as fit
+        left = EVAL_BAR.right + 12
+        for count in range(4, 0, -1):
+            line = self.small_font.render(line_text(self.eval_line, self.gs.rows, count), True, MUTED_TEXT)
+            if left + line.get_width() <= WIDTH - 16:
+                break
+        self.screen.blit(line, line.get_rect(midleft=(left, EVAL_BAR.bottom + 16)))
 
     def draw_dragged_piece(self):
         """The piece being dragged, under the mouse and on top of everything else"""
@@ -1197,19 +1212,25 @@ class ChessGUI:
             label = self.small_font.render(REVIEW_LABELS[action], True, TEXT)
             self.screen.blit(label, label.get_rect(center=rect.center))
 
-        index, total = self.review_index, len(self.move_log)
-        text = "Start of the game" if index == 0 else f"Move {index}/{total}: {self.move_texts[index - 1]}"
-        if index and index > len(self.review_marks):
-            text += " (checking...)"
-        elif index:
-            mark, better = self.review_marks[index - 1]
-            if mark:
-                text += f"{mark} better: {move_notation(better, self.gs.rows)}"
+        text = self.review_status_text()
         room = buttons[0][0].x - 16 - 12
         label = self.font.render(text, True, TEXT)
         if label.get_width() > room:
             label = self.small_font.render(text, True, TEXT)
         self.screen.blit(label, label.get_rect(midleft=(16, bar.centery)))
+
+    def review_status_text(self):
+        """Which move the review shows; for a mistake, also the better move and what the AI expects after it"""
+        index, total = self.review_index, len(self.move_log)
+        if index == 0:
+            return "Start of the game"
+        text = f"Move {index}/{total}: {self.move_texts[index - 1]}"
+        if index > len(self.review_marks):
+            return text + " (checking...)"
+        mark, better_line = self.review_marks[index - 1]
+        if mark:
+            text += f"{mark} better: {line_text(better_line, self.gs.rows, 3)}"
+        return text
 
     def draw_clocks(self, rect):
         """Each player's time left, side by side; the one that is running is lit up"""
