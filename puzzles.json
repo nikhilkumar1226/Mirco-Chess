@@ -1,0 +1,486 @@
+[
+ {
+  "id": "micro-1",
+  "code": "micro k.../..R./.K.P/..../.... w -",
+  "mate_in": 1,
+  "solution": [
+   "c4c5"
+  ]
+ },
+ {
+  "id": "micro-2",
+  "code": "micro k.../..R./.K../..BP/.... w -",
+  "mate_in": 1,
+  "solution": [
+   "c4c5"
+  ]
+ },
+ {
+  "id": "micro-3",
+  "code": "micro ..../kbK./..b./...r/.... b -",
+  "mate_in": 1,
+  "solution": [
+   "d2d4"
+  ]
+ },
+ {
+  "id": "micro-4",
+  "code": "micro k.../..RP/..../B.../...K w -",
+  "mate_in": 1,
+  "solution": [
+   "d4d5r"
+  ]
+ },
+ {
+  "id": "micro-5",
+  "code": "micro k.../..B./.R../.NKP/.... w -",
+  "mate_in": 1,
+  "solution": [
+   "b3b5"
+  ]
+ },
+ {
+  "id": "tiny-6",
+  "code": "tiny ..../.kr./.b../...K b -",
+  "mate_in": 1,
+  "solution": [
+   "c3d3"
+  ]
+ },
+ {
+  "id": "tiny-7",
+  "code": "tiny ..../k.K./..../.R.. w -",
+  "mate_in": 1,
+  "solution": [
+   "b1a1"
+  ]
+ },
+ {
+  "id": "tiny-8",
+  "code": "tiny ..r./..../.k.K/.... b -",
+  "mate_in": 1,
+  "solution": [
+   "c4d4"
+  ]
+ },
+ {
+  "id": "tiny-9",
+  "code": "tiny ..../.r../.k../...K b -",
+  "mate_in": 1,
+  "solution": [
+   "b3d3"
+  ]
+ },
+ {
+  "id": "donut-10",
+  "code": "donut ....k/....P/..#P./.r.../r..nK b -",
+  "mate_in": 1,
+  "solution": [
+   "d1e3"
+  ]
+ },
+ {
+  "id": "donut-11",
+  "code": "donut ....k/.p.../.b#n./..r../.K... b -",
+  "mate_in": 1,
+  "solution": [
+   "c2c1"
+  ]
+ },
+ {
+  "id": "pillars-12",
+  "code": "pillars ..n.k/p...p/P#.#P/..R../....K w -",
+  "mate_in": 1,
+  "solution": [
+   "c2c5"
+  ]
+ },
+ {
+  "id": "pillars-13",
+  "code": "pillars ...r./....p/.#n#P/p.k../....K b -",
+  "mate_in": 1,
+  "solution": [
+   "a2a1r"
+  ]
+ },
+ {
+  "id": "pillars-14",
+  "code": "pillars k.nN./p...p/P#.#P/...K./..R.. w -",
+  "mate_in": 1,
+  "solution": [
+   "c1c5"
+  ]
+ },
+ {
+  "id": "micro-15",
+  "code": "micro .k../R.../.K.P/..../.... w -",
+  "mate_in": 2,
+  "solution": [
+   "a4c4",
+   "b5a5",
+   "c4c5"
+  ]
+ },
+ {
+  "id": "micro-16",
+  "code": "micro ..../kb.K/p.../..../r... b -",
+  "mate_in": 2,
+  "solution": [
+   "a4b3",
+   "d4d3",
+   "a1d1"
+  ]
+ },
+ {
+  "id": "micro-17",
+  "code": "micro .k../..R./...P/B.../...K w -",
+  "mate_in": 2,
+  "solution": [
+   "d3d4",
+   "b5a5",
+   "d4d5r"
+  ]
+ },
+ {
+  "id": "micro-18",
+  "code": "micro ..../..../p.bk/...n/...K b -",
+  "mate_in": 2,
+  "solution": [
+   "a3a2",
+   "d1c1",
+   "a2a1r"
+  ]
+ },
+ {
+  "id": "tiny-19",
+  "code": "tiny .k../N..R/..../..K. w -",
+  "mate_in": 2,
+  "solution": [
+   "c1b2",
+   "b4a4",
+   "d3d4"
+  ]
+ },
+ {
+  "id": "tiny-20",
+  "code": "tiny k.../..../...K/.R.. w -",
+  "mate_in": 2,
+  "solution": [
+   "d2c3",
+   "a4a3",
+   "b1a1"
+  ]
+ },
+ {
+  "id": "tiny-21",
+  "code": "tiny ..r./..../..../k..K b -",
+  "mate_in": 2,
+  "solution": [
+   "a1b2",
+   "d1d2",
+   "c4d4"
+  ]
+ },
+ {
+  "id": "tiny-22",
+  "code": "tiny kb../..KN/..../.R.. w -",
+  "mate_in": 2,
+  "solution": [
+   "d3b4",
+   "a4a3",
+   "b1a1"
+  ]
+ },
+ {
+  "id": "tiny-23",
+  "code": "tiny ..../.Nr./.k.K/.... b -",
+  "mate_in": 2,
+  "solution": [
+   "c3b3",
+   "d2d1",
+   "b3d3"
+  ]
+ },
+ {
+  "id": "donut-24",
+  "code": "donut ....R/b...R/pn#../B..../.K.k. w -",
+  "mate_in": 2,
+  "solution": [
+   "a2b3",
+   "d1d2",
+   "e5d5"
+  ]
+ },
+ {
+  "id": "donut-25",
+  "code": "donut ...../..nk./..#.P/..K../rr... b -",
+  "mate_in": 2,
+  "solution": [
+   "c4e3",
+   "c2d2",
+   "a1a2"
+  ]
+ },
+ {
+  "id": "donut-26",
+  "code": "donut .rkbR/.N.../p.#.R/B..P./K.... w -",
+  "mate_in": 2,
+  "solution": [
+   "e3e4",
+   "b5a5",
+   "e5d5"
+  ]
+ },
+ {
+  "id": "donut-27",
+  "code": "donut .k.../pNR../..#P./.K.../..... w -",
+  "mate_in": 2,
+  "solution": [
+   "b2a3",
+   "b5a5",
+   "c4c5"
+  ]
+ },
+ {
+  "id": "donut-28",
+  "code": "donut K..../.p.k./..#../.r.../..... b -",
+  "mate_in": 2,
+  "solution": [
+   "d4c4",
+   "a5a4",
+   "b2a2"
+  ]
+ },
+ {
+  "id": "donut-29",
+  "code": "donut ....k/.p.../.b#n./..N.r/K.... b -",
+  "mate_in": 2,
+  "solution": [
+   "e2c2",
+   "a1b1",
+   "c2c1"
+  ]
+ },
+ {
+  "id": "pillars-30",
+  "code": "pillars k..../p..../P#K#P/..N../..... w -",
+  "mate_in": 2,
+  "solution": [
+   "e3e4",
+   "a5b5",
+   "e4e5r"
+  ]
+ },
+ {
+  "id": "pillars-31",
+  "code": "pillars ...K./pkn../.#.#./...../....r b -",
+  "mate_in": 2,
+  "solution": [
+   "b4c3",
+   "d5c5",
+   "e1e5"
+  ]
+ },
+ {
+  "id": "pillars-32",
+  "code": "pillars ...r./n...p/.#.#P/p.k.K/..... b -",
+  "mate_in": 2,
+  "solution": [
+   "a4c3",
+   "e2e1",
+   "a2a1r"
+  ]
+ },
+ {
+  "id": "micro-33",
+  "code": "micro ..../kbK./p.../..../Nr.. b -",
+  "mate_in": 3,
+  "solution": [
+   "b1a1",
+   "c4d4",
+   "a4b3",
+   "d4d3",
+   "a1d1"
+  ]
+ },
+ {
+  "id": "micro-34",
+  "code": "micro k.../..R./n.../K.BP/.... w -",
+  "mate_in": 3,
+  "solution": [
+   "a2a3",
+   "a5b5",
+   "c4c3",
+   "b5a5",
+   "c3c5"
+  ]
+ },
+ {
+  "id": "micro-35",
+  "code": "micro ..../p.../..bk/...n/..K. b -",
+  "mate_in": 3,
+  "solution": [
+   "a4a3",
+   "c1d1",
+   "a3a2",
+   "d1c1",
+   "a2a1r"
+  ]
+ },
+ {
+  "id": "tiny-36",
+  "code": "tiny .kN./...R/..K./..b. w -",
+  "mate_in": 3,
+  "solution": [
+   "d3d4",
+   "c1b2",
+   "c4b2",
+   "b4a3",
+   "d4a4"
+  ]
+ },
+ {
+  "id": "tiny-37",
+  "code": "tiny ..r./..B./kb../...K b -",
+  "mate_in": 3,
+  "solution": [
+   "c4c3",
+   "d1d2",
+   "a2b3",
+   "d2d1",
+   "c3d3"
+  ]
+ },
+ {
+  "id": "tiny-38",
+  "code": "tiny k.../b..N/..K./.R.. w -",
+  "mate_in": 3,
+  "solution": [
+   "c2c3",
+   "a3b2",
+   "d3b2",
+   "a4a3",
+   "b1a1"
+  ]
+ },
+ {
+  "id": "donut-39",
+  "code": "donut .r.bR/.N.k./p.#../B..P./K...R w -",
+  "mate_in": 3,
+  "solution": [
+   "e1e3",
+   "d4c5",
+   "e3e4",
+   "b5a5",
+   "e5d5"
+  ]
+ },
+ {
+  "id": "donut-40",
+  "code": "donut ..k../pNn.R/..#P./.K.../..... w -",
+  "mate_in": 3,
+  "solution": [
+   "e4c4",
+   "c5b5",
+   "b2a3",
+   "b5a5",
+   "c4c5"
+  ]
+ },
+ {
+  "id": "donut-41",
+  "code": "donut .K.../.p.../..#.k/.r.../..... b -",
+  "mate_in": 3,
+  "solution": [
+   "e3d4",
+   "b5a4",
+   "d4c5",
+   "a4a5",
+   "b2a2"
+  ]
+ },
+ {
+  "id": "donut-42",
+  "code": "donut ....R/...../.B#kN/...../.K... w -",
+  "mate_in": 3,
+  "solution": [
+   "e3c2",
+   "d3d2",
+   "e5d5",
+   "d2e2",
+   "b3c4"
+  ]
+ },
+ {
+  "id": "pillars-43",
+  "code": "pillars .k.../p..../P#.#P/..NK./..... w -",
+  "mate_in": 3,
+  "solution": [
+   "d2c3",
+   "b5c5",
+   "e3e4",
+   "c5b5",
+   "e4e5r"
+  ]
+ },
+ {
+  "id": "pillars-44",
+  "code": "pillars k.r../.b..p/p#.#P/Pn.R./..N.K b -",
+  "mate_in": 3,
+  "solution": [
+   "c5c2",
+   "e1e2",
+   "c2d2",
+   "e2e1",
+   "d2c2"
+  ]
+ },
+ {
+  "id": "pillars-45",
+  "code": "pillars k.r../..n.p/p#b#P/P...K/..N.. b -",
+  "mate_in": 3,
+  "solution": [
+   "c3b4",
+   "e2d1",
+   "c4b2",
+   "d1e2",
+   "c5c2"
+  ]
+ },
+ {
+  "id": "pillars-46",
+  "code": "pillars ..nr./p.k.p/P#N#P/...../..R.K w -",
+  "mate_in": 3,
+  "solution": [
+   "c3d5",
+   "c4b5",
+   "d5b4",
+   "b5a5",
+   "c1c5"
+  ]
+ },
+ {
+  "id": "pillars-47",
+  "code": "pillars ...../pkn.K/.#.#./...../r.... b -",
+  "mate_in": 3,
+  "solution": [
+   "b4c3",
+   "e4d5",
+   "a1e1",
+   "d5c5",
+   "e1e5"
+  ]
+ },
+ {
+  "id": "pillars-48",
+  "code": "pillars k.nr./p...p/P#N#P/...../..R.K w -",
+  "mate_in": 3,
+  "solution": [
+   "c3d5",
+   "a5b5",
+   "d5b4",
+   "b5a5",
+   "c1c5"
+  ]
+ }
+]

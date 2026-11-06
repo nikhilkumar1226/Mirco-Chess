@@ -38,3 +38,17 @@ def test_unknown_or_invalid_values_are_ignored(tmp_path):
 
 def test_saving_where_it_cannot_write_does_not_crash(tmp_path):
     settings.save(settings.DEFAULTS, tmp_path / "no such folder" / "settings.json")
+
+
+def test_solved_puzzles_keep_only_their_names(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"solved_puzzles": ["micro-1", 7, None, "tiny-3"]}))
+    assert settings.load(path)["solved_puzzles"] == ["micro-1", "tiny-3"]
+    path.write_text(json.dumps({"solved_puzzles": "micro-1"}))  # not a list at all
+    assert settings.load(path)["solved_puzzles"] == []
+
+
+def test_changing_loaded_settings_never_changes_the_defaults(tmp_path):
+    loaded = settings.load(tmp_path / "missing.json")
+    loaded["solved_puzzles"].append("micro-1")
+    assert settings.DEFAULTS["solved_puzzles"] == []

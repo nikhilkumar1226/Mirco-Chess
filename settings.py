@@ -1,5 +1,6 @@
 """The player's settings, remembered between launches in a small JSON file in their home folder."""
 
+import copy
 import json
 import os
 
@@ -25,6 +26,8 @@ DEFAULTS = {
     "eval_bar": False,
     "review": True,
     "clock": 0,  # minutes on each player's clock, or 0 for no clock
+    # Remembered as you play
+    "solved_puzzles": [],  # the ids of the puzzles solved so far
 }
 # Settings that can only take some values
 CHOICES = {
@@ -36,7 +39,7 @@ CHOICES = {
 
 def load(path=None):
     """The saved settings, with the default for anything missing, unknown or unreadable"""
-    settings = dict(DEFAULTS)
+    settings = copy.deepcopy(DEFAULTS)  # a copy of the lists too, so changing them never changes the defaults
     try:
         with open(path or SETTINGS_PATH) as file:
             saved = json.load(file)
@@ -45,6 +48,8 @@ def load(path=None):
     if isinstance(saved, dict):
         for key, value in saved.items():
             if key in DEFAULTS and type(value) is type(DEFAULTS[key]) and value in CHOICES.get(key, (value,)):
+                if isinstance(value, list):
+                    value = [item for item in value if isinstance(item, str)]
                 settings[key] = value
     return settings
 

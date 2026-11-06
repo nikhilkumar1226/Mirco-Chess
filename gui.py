@@ -4,6 +4,7 @@ The AI thinks in a background thread, so the window keeps responding while it se
 """
 
 import copy
+import json
 import os
 import queue
 import random
@@ -13,7 +14,7 @@ import traceback
 import pygame
 
 import settings
-from ai import get_ai_move, search_move, position_score, analyse_position, MATE_SCORE
+from ai import get_ai_move, search_move, position_score, analyse_position, move_mates_within, MATE_SCORE
 from chess_engine import GameState, ROWS, EMPTY, HOLE, VARIANTS, read_game_code, write_game_code
 from sounds import Sounds
 
@@ -74,6 +75,7 @@ MENU_CHOICES = [
 MENU_WIDTH = 400
 ICON_SQUARE = 6  # the size of a square in the little pictures of the boards on the menu
 MENU_SETTINGS = ("variant_key", "two_players", "human_is_white", "difficulty")  # remembered for next time
+MENU_PAGES = [("Puzzles", "puzzles"), ("Settings", "settings")]  # the buttons above Start game
 
 # The settings screen: (label, setting) for each on/off switch
 SETTING_SWITCHES = [
@@ -110,6 +112,8 @@ LOW_TIME_MS = 10_000  # a clock turns red when it gets this low
 NOTICE_MS = 4000  # how long a message (like "Game code copied") stays up
 # Where game codes go when there's no clipboard to copy them to (and are pasted from)
 CODE_PATH = os.path.join(os.path.expanduser("~"), ".micro_chess_code.txt")
+# The puzzles, made by tools/make_puzzles.py
+PUZZLES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "puzzles.json")
 EVAL_BAR_DEPTH = 4  # how deep the search for the evaluation bar looks (as deep as Medium)
 EVAL_BAR = pygame.Rect(BOARD_X + BOARD_AREA_WIDTH + 5, BOARD_Y, 10, BOARD_AREA_HEIGHT)  # between board and panel
 REVIEW_DEPTH = 4  # how deep game review searches to judge each move
@@ -141,6 +145,19 @@ def pasted_text():
         return None
     text = data.decode("utf-8", errors="replace").replace("\x00", "").strip() if data else ""
     return text or None
+
+
+def load_puzzles(path=None):
+    """The puzzles from puzzles.json: [{"id", "code", "mate_in", "solution"}, ...], or none if it can't be read"""
+    try:
+        with open(path or PUZZLES_PATH) as file:
+            puzzles = json.load(file)
+    except (OSError, ValueError):
+        return []
+    if not isinstance(puzzles, list):
+        return []
+    return [puzzle for puzzle in puzzles
+            if isinstance(puzzle, dict) and {"id", "code", "mate_in", "solution"} <= puzzle.keys()]
 
 
 def load_piece_images(size):
@@ -269,6 +286,8 @@ class ChessGUI:
         self.in_menu = True
         self.notice = None  # (message, time it goes away) shown at the top of the window
         self.start_code = None  # a position code to start games from, instead of the board's usual start
+        self.puzzles = load_puzzles()
+        self.puzzle_index = None  # which puzzle is being solved, or None in an ordinary game
         self.new_game()
 
     # ---- game state -------------------------------------------------------
@@ -277,6 +296,7 @@ class ChessGUI:
         """Leave the start menu and play with the chosen settings"""
         self.in_menu = False
         self.start_code = None
+        self.puzzle_index = None
         self.save_settings()
         self.new_game()
 
@@ -297,7 +317,7 @@ class ChessGUI:
         self.save_settings()
 
     def reset_clock(self):
-        minutes = self.settings["clock"]
+        minutes = self.settings["clock"] if self.puzzle_index is None else 0  # puzzles aren't timed
         self.clock_ms = {"white": minutes * 60_000, "black": minutes * 60_000} if minutes else None
         self.last_tick = self.ticks()
 
@@ -348,6 +368,11 @@ class ChessGUI:
         else:
             self.gs = GameState(variant=VARIANTS[self.variant_key])
         self.start_state = copy.deepcopy(self.gs)  # for the game code
+        if self.puzzle_index is not None:
+            self.puzzle_white = self.gs.white_to_move  # the solver plays the side to move
+            self.puzzle_moves_left = self.puzzles[self.puzzle_index]["mate_in"]
+        self.puzzle_status = None  # "solved", "failed" or "solution" once the puzzle is over
+        self.puzzle_reply = None  # the computer's defence, played once the solver's move has slid into place
         self.layout_board()
         self.move_log = []  # every move played, so U can take moves back
         self.move_texts = []  # the same moves as written in the move list, e.g. "d2-d3+"
@@ -362,8 +387,11 @@ class ChessGUI:
         self.review_state = None  # the position being reviewed
         self.review_marks = []  # (mark, better move) for each move, worked out during review
         self.reset_clock()
-        # Show the board from Black's side when playing Black against the computer
-        self.flipped = not self.two_players and not self.human_is_white
+        # Show the board from Black's side when playing Black against the computer (or solving as Black)
+        if self.puzzle_index is not None:
+            self.flipped = not self.puzzle_white
+        else:
+            self.flipped = not self.two_players and not self.human_is_white
         self.cancel_search()
         self.refresh()
 
@@ -397,8 +425,8 @@ class ChessGUI:
 
     def update_eval(self):
         """The score for the evaluation bar and the line of play the AI expects
-        (None and an empty line while the bar is switched off)"""
-        if self.settings["eval_bar"]:
+        (None and an empty line while the bar is switched off, or in a puzzle, where it would give the answer away)"""
+        if self.settings["eval_bar"] and self.puzzle_index is None:
             self.eval_score, self.eval_line = analyse_position(self.board_view()[0], EVAL_BAR_DEPTH)
         else:
             self.eval_score, self.eval_line = None, []
@@ -441,6 +469,7 @@ class ChessGUI:
         except ValueError as problem:
             self.show_notice(f"That isn't a game code: {problem}")
             return
+        self.puzzle_index = None
         self.load_game(start.to_code(), moves)
         self.show_notice("Game loaded")
 
@@ -458,6 +487,9 @@ class ChessGUI:
         self.refresh()
 
     def play(self, move, animate=True):
+        solving = (self.puzzle_index is not None and self.puzzle_status is None
+                   and move.piece_moved.startswith("white" if self.puzzle_white else "black"))
+        forces_mate = solving and move_mates_within(self.gs, move, self.puzzle_moves_left)
         self.gs.make_move(move)
         animate = animate and self.settings["animations"]
         self.animation = (move, pygame.time.get_ticks()) if animate else None
@@ -471,9 +503,13 @@ class ChessGUI:
         self.refresh()
         suffix = "#" if self.result == "checkmate" else "+" if self.check else ""
         self.move_texts.append(move_notation(move, self.gs.rows) + suffix)
+        if solving:
+            self.judge_puzzle_move(forces_mate)
 
     def undo(self):
         """Take back your last move and the AI's reply to it (one move in a 2-player game)"""
+        if self.puzzle_index is not None:
+            return  # in a puzzle, R starts it again instead
         # While the AI is thinking (or after you ended the game) only your move needs taking back
         count = 2 if self.is_human_turn() and not self.two_players else 1
         if len(self.move_log) < count or self.result in ("time", "time_draw"):
@@ -499,6 +535,8 @@ class ChessGUI:
             self.play(moves[0], animate)
 
     def is_human_turn(self):
+        if self.puzzle_index is not None:
+            return self.gs.white_to_move == self.puzzle_white
         return self.two_players or self.gs.white_to_move == self.human_is_white
 
     def moves_from(self, square):
@@ -581,6 +619,64 @@ class ChessGUI:
                    "last": len(self.move_log)}
         self.show_review_position(targets[action])
 
+    # ---- puzzles ------------------------------------------------------------
+
+    def open_puzzles(self):
+        """Start the first puzzle not solved yet (or the first one, once they're all solved)"""
+        solved = self.settings["solved_puzzles"]
+        unsolved = [i for i, puzzle in enumerate(self.puzzles) if puzzle["id"] not in solved]
+        if self.puzzles:
+            self.start_puzzle(unsolved[0] if unsolved else 0)
+
+    def start_puzzle(self, index):
+        self.puzzle_index = index % len(self.puzzles)
+        self.start_code = self.puzzles[self.puzzle_index]["code"]
+        self.in_menu = self.in_settings = False
+        self.new_game()
+
+    def next_puzzle(self):
+        """The next puzzle not solved yet, after this one"""
+        solved = self.settings["solved_puzzles"]
+        count = len(self.puzzles)
+        later = [(self.puzzle_index + step) % count for step in range(1, count + 1)]
+        self.start_puzzle(next((i for i in later if self.puzzles[i]["id"] not in solved), later[0]))
+
+    def judge_puzzle_move(self, forces_mate):
+        """After the solver's move: solved, a miss, or the computer finds its best defence"""
+        puzzle = self.puzzles[self.puzzle_index]
+        if self.result == "checkmate":
+            self.puzzle_status = "solved"
+            if puzzle["id"] not in self.settings["solved_puzzles"]:
+                self.settings["solved_puzzles"].append(puzzle["id"])
+                self.save_settings()
+        elif not forces_mate:
+            self.puzzle_status = "failed"
+        else:
+            self.puzzle_moves_left -= 1
+            # The defence that holds out longest, played after the solver's move has slid into place
+            self.puzzle_reply = search_move(self.gs, depth=2 * self.puzzle_moves_left, rng=random.Random(0)).move
+
+    def show_solution(self):
+        """Play the puzzle's winning line from the start; the review arrows step through it"""
+        puzzle = self.puzzles[self.puzzle_index]
+        _, moves = read_game_code(" ".join([puzzle["code"]] + puzzle["solution"]))
+        self.load_game(puzzle["code"], moves)
+        self.puzzle_status = "solution"
+
+    def puzzle_status_line(self):
+        """What the status bar says during a puzzle"""
+        puzzle = self.puzzles[self.puzzle_index]
+        if self.puzzle_status == "solved":
+            solved = len(self.settings["solved_puzzles"])
+            return f"Solved! {solved} of {len(self.puzzles)} puzzles solved"
+        if self.puzzle_status == "failed":
+            return "Not quite: there's no forced mate after that"
+        if self.puzzle_status == "solution":
+            return "The solution: press Left to step back through it"
+        side = "White" if self.puzzle_white else "Black"
+        moves = self.puzzle_moves_left
+        return f"Puzzle {self.puzzle_index + 1}/{len(self.puzzles)}: {side} to move, mate in {moves}"
+
     # ---- AI ---------------------------------------------------------------
 
     def start_search(self, kind, difficulty):
@@ -618,7 +714,8 @@ class ChessGUI:
         self.hint_thinking = False
 
     def can_ask_for_hint(self):
-        return (self.settings["hints"] and not self.in_menu and self.result is None and self.is_human_turn()
+        return (self.settings["hints"] and self.puzzle_index is None and not self.in_menu and self.result is None
+                and self.is_human_turn()
                 and not self.ai_thinking and not self.hint_thinking and self.hint is None
                 and not self.promotion_choices)
 
@@ -666,7 +763,11 @@ class ChessGUI:
                 self.ai_thinking = False
                 # If the search failed, any legal move keeps the game going
                 self.play(move or random.choice(self.valid_moves))
-        if not self.in_menu and self.result is None and not self.is_human_turn() and not self.ai_thinking:
+        if self.puzzle_reply and self.animation is None:
+            reply, self.puzzle_reply = self.puzzle_reply, None
+            self.play(reply)
+        if (not self.in_menu and self.result is None and not self.is_human_turn() and not self.ai_thinking
+                and self.puzzle_index is None):
             self.start_search("ai", self.difficulty)
         # Game review judges one move per frame, so the window keeps responding
         if self.review_index is not None and len(self.review_marks) < len(self.move_log):
@@ -768,8 +869,9 @@ class ChessGUI:
                 setattr(self, setting, value)
         if self.start_button_rect().collidepoint(pos):
             self.start_game()
-        elif self.menu_settings_rect().collidepoint(pos):
-            self.open_settings()
+        for rect, _, page in self.menu_page_buttons():
+            if rect.collidepoint(pos) and self.menu_page_enabled(page):
+                {"puzzles": self.open_puzzles, "settings": self.open_settings}[page]()
 
     def handle_click(self, pos):
         if self.gear_button_rect().collidepoint(pos):
@@ -783,6 +885,13 @@ class ChessGUI:
             for rect, index in self.move_cells():  # clicking a move in the list shows the position after it
                 if rect.collidepoint(pos):
                     self.show_review_position(index + 1)
+            return
+
+        if self.puzzle_status is not None:
+            for rect, _, action in self.puzzle_buttons():
+                if rect.collidepoint(pos):
+                    {"retry": self.new_game, "solution": self.show_solution, "next": self.next_puzzle}[action]()
+                    return
             return
 
         if self.result is not None:
@@ -888,9 +997,18 @@ class ChessGUI:
     def game_over_buttons(self):
         """(rect, label, action) for the buttons on the game-over panel"""
         if self.can_review():
-            buttons, gap = [("Play again", "again", 112), ("Review", "review", 86), ("Menu", "menu", 72)], 8
-        else:
-            buttons, gap = [("Play again", "again", 124), ("Menu", "menu", 124)], 12
+            return self.dialog_buttons([("Play again", "again", 112), ("Review", "review", 86), ("Menu", "menu", 72)], 8)
+        return self.dialog_buttons([("Play again", "again", 124), ("Menu", "menu", 124)], 12)
+
+    def puzzle_buttons(self):
+        """(rect, label, action) for the buttons on the panel that ends a puzzle"""
+        buttons = [("Retry", "retry", 76), ("Show solution", "solution", 136), ("Next", "next", 68)]
+        if self.puzzle_status == "solution":
+            buttons.pop(1)
+        return self.dialog_buttons(buttons, 8)
+
+    def dialog_buttons(self, buttons, gap):
+        """Lay out [(label, action, width), ...] as a centered row of buttons on a dialog over the board"""
         x = self.board_rect().centerx - (sum(width for _, _, width in buttons) + gap * (len(buttons) - 1)) // 2
         rects = []
         for label, action, width in buttons:
@@ -956,11 +1074,11 @@ class ChessGUI:
     def menu_headings(self):
         """(heading, setting, position, button height) for each group of choices on the start menu"""
         left = (WIDTH - MENU_WIDTH) // 2
-        headings, top = [], 88
+        headings, top = [], 76
         for heading, setting, _ in MENU_CHOICES:
             height = 60 if setting == "variant_key" else 40  # room for a picture of each board
             headings.append((heading, setting, (left, top), height))
-            top += 24 + height + 14
+            top += 24 + height + 10
         return headings
 
     def menu_buttons(self):
@@ -978,12 +1096,22 @@ class ChessGUI:
         # Side and difficulty only matter against the computer
         return setting in ("variant_key", "two_players") or not self.two_players
 
+    def menu_page_buttons(self):
+        """(rect, label, page) for the row of buttons above Start game: Puzzles, Settings and so on"""
+        gap = 10
+        width = (MENU_WIDTH - gap * (len(MENU_PAGES) - 1)) // len(MENU_PAGES)
+        left = (WIDTH - MENU_WIDTH) // 2
+        return [(pygame.Rect(left + i * (width + gap), 394, width, 34), label, page)
+                for i, (label, page) in enumerate(MENU_PAGES)]
+
+    def menu_page_enabled(self, page):
+        return page != "puzzles" or bool(self.puzzles)
+
     def menu_settings_rect(self):
-        return pygame.Rect((WIDTH - MENU_WIDTH) // 2, 424, 128, 48)
+        return next(rect for rect, _, page in self.menu_page_buttons() if page == "settings")
 
     def start_button_rect(self):
-        settings_button = self.menu_settings_rect()
-        return pygame.Rect(settings_button.right + 12, 424, MENU_WIDTH - settings_button.width - 12, 48)
+        return pygame.Rect((WIDTH - MENU_WIDTH) // 2, 438, MENU_WIDTH, 46)
 
     # ---- settings screen geometry -----------------------------------------
 
@@ -1040,14 +1168,16 @@ class ChessGUI:
             self.draw_dragged_piece()
         if self.promotion_choices:
             self.draw_promotion_picker()
-        if self.result is not None and self.review_index is None:
+        if self.puzzle_status is not None and self.review_index is None:
+            self.draw_puzzle_dialog()
+        elif self.result is not None and self.review_index is None and self.puzzle_index is None:
             self.draw_game_over()
         if self.confirming_quit:
             self.draw_quit_dialog()
 
     def draw_menu(self):
         title = self.title_font.render("Micro Chess", True, TEXT)
-        self.screen.blit(title, title.get_rect(center=(WIDTH // 2, 48)))
+        self.screen.blit(title, title.get_rect(center=(WIDTH // 2, 40)))
 
         for heading, setting, position, _ in self.menu_headings():
             color = MUTED_TEXT if self.menu_setting_enabled(setting) else DISABLED_TEXT
@@ -1077,12 +1207,17 @@ class ChessGUI:
                 text = self.font.render(label, True, color)
                 self.screen.blit(text, text.get_rect(center=rect.center))
 
-        for button, text, fill, hover_fill in ((self.menu_settings_rect(), "Settings", CHOICE, CHOICE_HOVER),
-                                               (self.start_button_rect(), "Start game", BUTTON, BUTTON_HOVER)):
-            pygame.draw.rect(self.screen, hover_fill if button.collidepoint(mouse) else fill, button,
-                             border_radius=12)
-            label = self.font.render(text, True, TEXT)
+        for button, text, page in self.menu_page_buttons():
+            enabled = self.menu_page_enabled(page)
+            hover = enabled and button.collidepoint(mouse)
+            pygame.draw.rect(self.screen, CHOICE_HOVER if hover else CHOICE, button, border_radius=10)
+            label = self.small_font.render(text, True, TEXT if enabled else DISABLED_TEXT)
             self.screen.blit(label, label.get_rect(center=button.center))
+        button = self.start_button_rect()
+        pygame.draw.rect(self.screen, BUTTON_HOVER if button.collidepoint(mouse) else BUTTON, button,
+                         border_radius=12)
+        label = self.font.render("Start game", True, TEXT)
+        self.screen.blit(label, label.get_rect(center=button.center))
 
     def draw_settings(self):
         title = self.title_font.render("Settings", True, TEXT)
@@ -1262,7 +1397,7 @@ class ChessGUI:
         mouse = pygame.mouse.get_pos()
         gear = self.gear_button_rect()
         self.draw_gear(gear.center, TEXT if gear.collidepoint(mouse) else MUTED_TEXT)
-        if self.settings["hints"]:
+        if self.settings["hints"] and self.puzzle_index is None:
             button = self.hint_button_rect()
             if self.can_ask_for_hint():
                 fill, text_color = (BUTTON_HOVER if button.collidepoint(mouse) else BUTTON), TEXT
@@ -1361,7 +1496,9 @@ class ChessGUI:
             self.draw_review_status(bar)
             return
 
-        if self.result is not None:
+        if self.puzzle_index is not None:
+            text, color = self.puzzle_status_line(), TEXT
+        elif self.result is not None:
             text, color = result_line(self.result, self.gs.white_to_move), TEXT
         elif self.ai_thinking:
             text, color = "Thinking...", MUTED_TEXT
@@ -1377,7 +1514,10 @@ class ChessGUI:
         label = self.font.render(text, True, color)
         self.screen.blit(label, label.get_rect(midleft=(16, bar.centery)))
 
-        keys = ("H hint  " if self.settings["hints"] else "") + "R restart  U undo  N menu  S settings"
+        if self.puzzle_index is not None:
+            keys = "R retry  N menu"
+        else:
+            keys = ("H hint  " if self.settings["hints"] else "") + "R restart  U undo  N menu  S settings"
         keys = self.small_font.render(keys, True, MUTED_TEXT)
         if label.get_width() + keys.get_width() + 48 <= WIDTH:
             self.screen.blit(keys, keys.get_rect(midright=(WIDTH - 16, bar.centery)))
@@ -1432,6 +1572,17 @@ class ChessGUI:
         title, detail = game_over_text(self.result, self.gs.white_to_move)
         self.draw_dialog(title, detail, [(rect, label, BUTTON, BUTTON_HOVER)
                                          for rect, label, _ in self.game_over_buttons()])
+
+    def draw_puzzle_dialog(self):
+        puzzle = self.puzzles[self.puzzle_index]
+        if self.puzzle_status == "solved":
+            title, detail = "Solved!", f"Mate in {puzzle['mate_in']}"
+        elif self.puzzle_status == "failed":
+            title, detail = "Not quite", "That doesn't force mate"
+        else:
+            title, detail = "Solution", line_text(self.move_log, self.gs.rows, 5)
+        self.draw_dialog(title, detail, [(rect, label, BUTTON, BUTTON_HOVER)
+                                         for rect, label, _ in self.puzzle_buttons()])
 
     def draw_quit_dialog(self):
         self.draw_dialog("Quit the game?", "This game will be lost",

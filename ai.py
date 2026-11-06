@@ -498,6 +498,23 @@ def analyse_position(game_state, depth):
     return score, search.lines.get(1, [])
 
 
+def move_mates_within(game_state, move, moves):
+    """True if `move` forces checkmate within `moves` moves of the side playing it (counting
+    this one), whatever the defence. A full search checks every reply."""
+    white = game_state.white_to_move
+    game_state.make_move(move)
+    # The mate comes on the side's last move at the latest: 2 * moves - 2 plies after this one
+    score = position_score(game_state, 2 * moves - 2)
+    game_state.undo_move(move)
+    own_score = score if white else -score
+    return own_score >= MATE_SCORE - (2 * moves - 1)
+
+
+def mating_moves(game_state, moves):
+    """The moves that force checkmate within `moves` moves (see move_mates_within)"""
+    return [move for move in game_state.get_valid_moves() if move_mates_within(game_state, move, moves)]
+
+
 def time_budget(difficulty, time_left=None):
     """How many seconds the AI may think: its level's time, and with a chess clock no more
     than a fair share of what's left on its clock"""
