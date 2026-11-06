@@ -501,10 +501,14 @@ class ChessGUI:
             self.hint_thinking = True
         self.search_id += 1
         search_id, position = self.search_id, copy.deepcopy(self.gs)
+        # With a chess clock, the computer keeps an eye on the time left on its own clock
+        time_left = None
+        if kind == "ai" and self.clock_ms is not None:
+            time_left = self.clock_ms["white" if self.gs.white_to_move else "black"] / 1000
 
         def think():
             try:
-                move = get_ai_move(position, difficulty)
+                move = get_ai_move(position, difficulty, time_left=time_left)
             except Exception:
                 traceback.print_exc()
                 move = None  # update() copes with a search that found nothing

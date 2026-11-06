@@ -4,8 +4,8 @@ import time
 import pytest
 
 import ai
-from ai import (get_ai_move, evaluate_board, minimax_alpha_beta, quiescence, Search, DIFFICULTY_DEPTHS,
-                DIFFICULTY_MARGINS, MATE_SCORE)
+from ai import (get_ai_move, search_move, evaluate_board, minimax_alpha_beta, quiescence, Search,
+                DIFFICULTY_DEPTHS, DIFFICULTY_MARGINS, MATE_SCORE)
 from chess_engine import GameState, MICRO, DONUT
 from helpers import position, square, find_move
 
@@ -177,6 +177,51 @@ def test_mate_scores_stay_right_when_stored_in_the_table():
         assert ai.from_table(ai.to_table(-score, ply), ply) == -score
     assert ai.to_table(MATE_SCORE - 7, 3) == MATE_SCORE - 4  # mate 4 plies after this position
     assert ai.to_table(250, 3) == 250  # ordinary scores are stored as they are
+
+
+def test_a_depth_means_one_exact_repeatable_search():
+    first = search_move(GameState(), depth=4, rng=random.Random(2))
+    again = search_move(GameState(), depth=4, rng=random.Random(2))
+    assert first.depth == again.depth == 4
+    assert (first.move, first.score, first.nodes) == (again.move, again.score, again.nodes)
+
+
+def test_each_level_searches_down_to_its_depth():
+    for difficulty in ("easy", "medium", "hard"):
+        result = search_move(GameState(), difficulty, rng=random.Random(1))
+        assert result.depth == DIFFICULTY_DEPTHS[difficulty]
+
+
+def test_the_ai_stops_when_its_time_is_up(monkeypatch):
+    # Hard with hardly any time and no depth limit still answers, and quickly
+    monkeypatch.setitem(ai.DIFFICULTY_TIMES, "hard", 0.05)
+    monkeypatch.setitem(ai.DIFFICULTY_DEPTHS, "hard", 30)
+    gs = GameState(variant=DONUT)
+    start = time.perf_counter()
+    result = search_move(gs, "hard")
+    assert time.perf_counter() - start < 0.5
+    assert result.move in gs.get_valid_moves() and 1 <= result.depth < 30
+    assert gs.position_key() == GameState(variant=DONUT).position_key()  # every move was taken back
+    assert gs.position_history == GameState(variant=DONUT).position_history
+
+
+def test_the_first_depth_always_finishes(monkeypatch):
+    monkeypatch.setitem(ai.DIFFICULTY_TIMES, "medium", 0)
+    result = search_move(GameState(), "medium")
+    assert result.depth == 1 and result.move in GameState().get_valid_moves()
+
+
+def test_a_chess_clock_shortens_the_thinking_time():
+    assert ai.time_budget("hard") == ai.DIFFICULTY_TIMES["hard"]
+    assert ai.time_budget("hard", time_left=600) == ai.DIFFICULTY_TIMES["hard"]  # plenty of time left
+    assert ai.time_budget("hard", time_left=10) == 10 / ai.MOVES_TO_GO  # a fair share of what's left
+    assert ai.time_budget("hard", time_left=0.2) == ai.MIN_THINKING_TIME
+
+
+def test_a_mate_ends_the_search_at_once():
+    gs = position({"a5": "black_king", "c4": "white_pawn", "b3": "white_king"})
+    result = search_move(gs, "hard")
+    assert is_move(result.move, "c4", "c5") and result.depth == 1 and result.score == MATE_SCORE - 2
 
 
 def turned_around(gs):

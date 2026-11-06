@@ -628,6 +628,22 @@ def test_running_out_of_time_is_a_draw_if_the_other_side_has_only_a_king(timed):
     app.draw()
 
 
+def test_the_computer_keeps_an_eye_on_its_clock(timed, monkeypatch):
+    app, time = timed
+    seen = []
+
+    def recording_search(position, difficulty, time_left=None):
+        seen.append(time_left)
+        return position.get_valid_moves()[0]
+
+    monkeypatch.setattr(gui, "get_ai_move", recording_search)
+    click(app, "a1")
+    click(app, "a4")
+    app.update()
+    wait_for_ai(app)
+    assert seen == [60.0]  # Black's clock had its full minute
+
+
 def test_choosing_a_clock_in_settings_restarts_it(timed):
     app, time = timed
     time.now = 10_000
